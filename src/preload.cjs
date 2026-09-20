@@ -15,6 +15,12 @@ let hasShownVideo = false;
 let ready = false;
 let controlEnabled = false;
 let moving = false;
+let options = false;
+let deviceName = '';
+/** @type {HTMLDivElement} */
+let titleBar;
+/** @type {HTMLSpanElement} */
+let titleLabel;
 let releasing = false;
 let lastStreaming = false;
 let loginReported = false;
@@ -38,6 +44,8 @@ ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
   controlEnabled = mode?.controlEnabled === true;
   moving = mode?.moving === true;
+  options = mode?.options === true;
+  deviceName = typeof mode?.name === 'string' ? mode.name : '';
   if (surface) update();
 });
 window.addEventListener('blur', releaseInput);
@@ -66,6 +74,13 @@ for (const name of [
 }
 
 function update() {
+  const root = document.documentElement;
+  root.toggleAttribute('data-glkvm-options', options);
+  if (titleLabel) titleLabel.textContent = `${deviceName} — Device Settings`;
+  if (options) {
+    for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
+    return;
+  }
   const next = document.querySelector('#stream-video, #stream-canvas');
   const nextSource = next instanceof HTMLVideoElement || next instanceof HTMLCanvasElement ? next : null;
   const nextPlayer = nextSource?.closest('#stream-box');
@@ -84,7 +99,6 @@ function update() {
   } else ready = false;
   if (!player || signingIn) { hasShownVideo = false; ready = false; }
   else if (ready) hasShownVideo = true;
-  const root = document.documentElement;
   root.setAttribute('data-glkvm-clean', '');
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
@@ -127,7 +141,19 @@ window.addEventListener('DOMContentLoaded', () => {
       opacity: 1 !important; z-index: auto !important; overflow: visible !important;
       clip-path: none !important; animation: none !important; transition: none !important;
     }
-    #glkvm-clean-surface, #glkvm-clean-drag { display: none; }
+    #glkvm-clean-surface, #glkvm-clean-drag, #glkvm-title-bar { display: none; }
+    html[data-glkvm-options] { padding-top: 32px !important; box-sizing: border-box !important; }
+    html[data-glkvm-options] #glkvm-title-bar {
+      display: block; position: fixed; top: 0; left: 0; right: 0; height: 32px;
+      z-index: 2147483647; background: #252525; color: #eee; text-align: center;
+      font: 13px/32px system-ui; user-select: none; -webkit-app-region: drag;
+    }
+    #glkvm-title-bar .window-buttons { position: absolute; left: 12px; top: 10px; display: flex; gap: 8px; }
+    #glkvm-title-bar button {
+      -webkit-app-region: no-drag; width: 12px; height: 12px; border-radius: 50%;
+      padding: 0; border: 1px solid #0003; cursor: default;
+    }
+    #glkvm-title-bar button:focus-visible { outline: 2px solid white; outline-offset: 2px; }
     html[data-glkvm-clean] #glkvm-clean-surface {
       display: flex; position: fixed; inset: 0; z-index: 2147483645;
       align-items: center; justify-content: center; visibility: visible !important;
@@ -168,7 +194,17 @@ window.addEventListener('DOMContentLoaded', () => {
   status.id = 'glkvm-clean-status'; status.textContent = 'Waiting for live video…';
   surface.append(status);
   const drag = document.createElement('div'); drag.id = 'glkvm-clean-drag';
-  document.documentElement.append(surface, drag);
+  titleBar = document.createElement('div'); titleBar.id = 'glkvm-title-bar';
+  titleLabel = document.createElement('span');
+  const buttons = document.createElement('div'); buttons.className = 'window-buttons';
+  for (const [action, label, color] of [['close', 'Close window', '#ff5f57'], ['minimize', 'Minimize window', '#febc2e'], ['fullscreen', 'Toggle fullscreen', '#28c840']]) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.setAttribute('aria-label', label); button.title = label; button.style.background = color;
+    button.addEventListener('click', event => { event.stopPropagation(); ipcRenderer.send('glkvm:window-action', action); });
+    buttons.append(button);
+  }
+  titleBar.append(buttons, titleLabel);
+  document.documentElement.append(surface, drag, titleBar);
   new MutationObserver(update).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('resize', update);
   setInterval(update, 500);
