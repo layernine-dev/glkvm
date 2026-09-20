@@ -55,7 +55,9 @@ body { margin: 0; background: #ed11aa; }
       window.disconnect(); document.querySelector('#stream-video').remove(); document.querySelector('#toolbar').remove();
       const login = document.createElement('div'); login.id = 'login'; login.innerHTML = 'Login required <input id="password" type="password">'; document.body.append(login);
     };
-    if (localStorage.getItem('fixture-auth') === 'true') window.connect();
+    // The vendor router keeps /login public even when a session already exists.
+    if (localStorage.getItem('fixture-auth') === 'true' && location.hash !== '#/login') window.connect();
+    else location.hash = '/login';
   </script>
 </body>
 </html>

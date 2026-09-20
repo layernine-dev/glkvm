@@ -63,6 +63,7 @@ server.listen(0, '127.0.0.1', async () => {
     })()`), true);
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-control')"));
     await waitFor(() => login.isDestroyed());
+    assert.equal(new URL(clean.webContents.getURL()).hash, '');
     assert.equal(BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')), false);
     const bounds = clean.getBounds();
     clean.focus();
