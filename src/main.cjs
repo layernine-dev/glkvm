@@ -239,7 +239,7 @@ ipcMain.on('glkvm:console-connected', event => {
   const consoleEntry = deviceSender(event);
   if (!consoleEntry || consoles.get(consoleEntry.device.id) !== consoleEntry) return;
   const clean = windows.get(consoleEntry.device.id);
-  if (clean?.needsLogin) { clean.needsLogin = false; clean.window.webContents.reload(); }
+  if (clean?.needsLogin) { clean.needsLogin = false; void clean.window.loadURL(`${clean.device.origin}/`).catch(() => {}); }
   if (consoleEntry.background) consoleEntry.window.close();
 });
 ipcMain.on('glkvm:stream-state', (event, streaming) => { const entry = deviceSender(event); if (entry) entry.streaming = streaming === true; });
