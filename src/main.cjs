@@ -10,7 +10,7 @@ const { scales, windowSize } = require('./window-sizes.cjs');
 
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, needsLogin: boolean, background: boolean, videoSize: {width: number, height: number} | null}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, videoSize: {width: number, height: number} | null}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -35,7 +35,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving });
+  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, name: entry.device.name });
 }
 /** @param {Entry} entry */
 function releaseInput(entry) { entry.window.webContents.send('glkvm:release-input'); }
@@ -49,19 +49,41 @@ function toggleMode(entry) {
   sendMode(entry);
   installMenu();
 }
-const modeShortcut = 'CommandOrControl+Shift+M';
-function updateModeShortcuts() {
+/** @returns {Map<string, () => void>} */
+function appShortcuts() {
+  const shortcuts = new Map();
+  if (!BrowserWindow.getFocusedWindow()) return shortcuts;
+  config.devices.slice(0, 9).forEach((device, index) => shortcuts.set(`CommandOrControl+${index + 1}`, () => showDevice(device)));
+  shortcuts.set('CommandOrControl+Shift+O', toggleDeviceSettings);
   const entry = focusedEntry();
-  const clean = entry && windows.get(entry.device.id) === entry;
-  if (!clean) globalShortcut.unregister(modeShortcut);
-  else if (!globalShortcut.isRegistered(modeShortcut)) {
-    // Native drag regions can take focus away from Chromium. Register only
-    // while a clean window is focused, and resolve the target at invocation.
-    globalShortcut.register(modeShortcut, () => {
-      const target = focusedEntry();
-      if (target && windows.get(target.device.id) === target) toggleMode(target);
-    });
+  if (entry && windows.get(entry.device.id) === entry && !entry.options) {
+    shortcuts.set('CommandOrControl+Shift+M', () => toggleMode(entry));
   }
+  return shortcuts;
+}
+const registeredShortcuts = new Set();
+function updateModeShortcuts() {
+  const wanted = appShortcuts();
+  for (const accelerator of registeredShortcuts) {
+    if (!wanted.has(accelerator)) { globalShortcut.unregister(accelerator); registeredShortcuts.delete(accelerator); }
+  }
+  for (const accelerator of wanted.keys()) {
+    if (registeredShortcuts.has(accelerator)) continue;
+    if (globalShortcut.register(accelerator, () => appShortcuts().get(accelerator)?.())) registeredShortcuts.add(accelerator);
+  }
+}
+/** @param {Electron.WebContents} contents */
+function handleAppShortcuts(contents) {
+  contents.on('before-input-event', (event, input) => {
+    const command = process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta;
+    if (!command || input.alt) return;
+    const key = input.key.toUpperCase();
+    const accelerator = `CommandOrControl+${input.shift ? 'Shift+' : ''}${key}`;
+    const action = appShortcuts().get(accelerator);
+    if (!action) return;
+    event.preventDefault();
+    if (input.type === 'keyDown' && !input.isAutoRepeat) action();
+  });
 }
 /** @param {Entry} entry @param {{width: number, height: number}} size @param {number} scale */
 function resizeWindow(entry, size, scale) {
@@ -122,7 +144,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, videoSize: null };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, options: false, cleanBounds: null, videoSize: null };
   collection.set(device.id, entry);
   win.webContents.setAudioMuted(consoleWindow || config.muted);
   win.on('closed', () => { collection.delete(device.id); installMenu(); });
@@ -136,19 +158,11 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
-  win.webContents.on('before-input-event', (event, input) => {
-    const key = input.key.toLowerCase();
-    const modeKey = !consoleWindow && input.shift && !input.alt && (process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta) && key === 'm';
-    if (modeKey) {
-      // Also handle synthetic input and native registration conflicts. Prevent
-      // both renderer delivery and the menu accelerator from toggling twice.
-      event.preventDefault();
-      if (input.type === 'keyDown' && !input.isAutoRepeat) toggleMode(entry);
-      return;
-    }
+  handleAppShortcuts(win.webContents);
+  win.webContents.on('before-input-event', (_event, input) => {
     // Editing shortcuts belong to the remote computer while its player is focused.
     // App/window commands keep their explicit, documented shortcuts.
-    const remoteEdit = !consoleWindow && entry.streaming && entry.controlEnabled && !entry.moving && input.meta && !input.alt && ['a', 'c', 'v', 'x', 'z'].includes(input.key.toLowerCase()) && !(input.shift && input.key.toLowerCase() === 'c');
+    const remoteEdit = !consoleWindow && !entry.options && entry.streaming && entry.controlEnabled && !entry.moving && input.meta && !input.alt && ['a', 'c', 'v', 'x', 'z'].includes(input.key.toLowerCase()) && !(input.shift && input.key.toLowerCase() === 'c');
     win.webContents.setIgnoreMenuShortcuts(remoteEdit);
   });
   win.once('ready-to-show', () => { if (!entry.background) win.show(); });
@@ -166,9 +180,29 @@ function showDevice(device, consoleWindow = false, background = false) {
 function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
-  const existing = consoles.get(device.id);
-  if (existing?.window.isFocused()) { existing.window.close(); windows.get(device.id)?.window.focus(); }
-  else showDevice(device, true);
+  const entry = showDevice(device);
+  const win = entry.window;
+  releaseInput(entry);
+  entry.options = !entry.options;
+  win.webContents.setIgnoreMenuShortcuts(false);
+  win.setAspectRatio(0);
+  if (entry.options) {
+    entry.cleanBounds = win.getBounds();
+    win.setMinimumSize(720, 500);
+    if (!win.isFullScreen()) {
+      const work = screen.getDisplayMatching(win.getBounds()).workArea;
+      win.setSize(Math.min(work.width, Math.max(1000, entry.cleanBounds.width)), Math.min(work.height, Math.max(750, entry.cleanBounds.height)));
+    }
+  } else {
+    win.setMinimumSize(160, 90);
+    if (entry.cleanBounds && !win.isFullScreen()) win.setBounds(entry.cleanBounds);
+    if (entry.videoSize) win.setAspectRatio(entry.videoSize.width / entry.videoSize.height);
+  }
+  win.setHasShadow(entry.options);
+  sendMode(entry);
+  win.webContents.focus();
+  installMenu();
+  updateModeShortcuts();
 }
 
 function showSettings() {
@@ -178,6 +212,7 @@ function showSettings() {
     show: false, minimizable: false, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'settings-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  handleAppShortcuts(settingsWindow.webContents);
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWindow.webContents.on('will-navigate', event => event.preventDefault());
   settingsWindow.on('closed', () => { settingsWindow = null; });
@@ -188,13 +223,13 @@ function showSettings() {
 
 function installMenu() {
   const entry = focusedEntry();
-  const clean = entry && windows.get(entry.device.id) === entry;
+  const clean = entry && windows.get(entry.device.id) === entry && !entry.options;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
-    { label: 'Device', submenu: [
+    { label: entry ? `Device — ${entry.device.name}` : 'Device', submenu: [
       ...config.devices.map((device, i) => ({ label: `Open ${device.name}`, ...(i < 9 ? { accelerator: `CmdOrCtrl+${i + 1}` } : {}), click: () => showDevice(device) })),
       { label: 'Manage Connections…', click: showSettings }, { type: 'separator' },
-      { label: 'Device Settings…', accelerator: 'CmdOrCtrl+Shift+O', enabled: !!config.devices.length, click: toggleDeviceSettings },
+      { label: 'Device Settings…', type: 'checkbox', checked: !!entry?.options, accelerator: 'CmdOrCtrl+Shift+O', enabled: !!config.devices.length, click: toggleDeviceSettings },
       { label: 'Move Window Mode', accelerator: 'CmdOrCtrl+Shift+M', type: 'checkbox', enabled: !!clean, checked: !!clean && (!entry.controlEnabled || entry.moving), click: () => {
         if (clean) toggleMode(entry);
       } }, { type: 'separator' },
@@ -223,7 +258,7 @@ function installMenu() {
       { role: 'togglefullscreen' }, { type: 'separator' }, { role: 'front' },
     ] },
     { label: 'Help', submenu: [{ label: 'Using GLKVM Clean', click: () => {
-      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. Settings always open in separate windows.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera and microphone access are unavailable. No screen-sharing session is started by this app.' });
+      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera and microphone access are unavailable. No screen-sharing session is started by this app.' });
     } }] },
   ]));
 }
@@ -252,6 +287,7 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
         const clean = windows.get(updated.id) === entry;
         entry.window.setTitle(clean ? `GLKVM ${updated.name}` : `${updated.name} — Device Settings`);
         if (clean && previous.controlEnabled !== next.controlEnabled) { releaseInput(entry); entry.controlEnabled = next.controlEnabled; entry.moving = false; sendMode(entry); }
+        sendMode(entry);
         entry.window.webContents.setAudioMuted(!clean || next.muted);
         if (!clean && passwordChanged && updated.encryptedPassword) entry.window.webContents.reload();
       }
@@ -260,6 +296,7 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
       if (entry.needsLogin && entry.device.encryptedPassword) showDevice(entry.device, true, true);
     }
     installMenu();
+    updateModeShortcuts();
     return { ok: true, config: publicConfig(config) };
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
   finally { savingSettings = false; }
@@ -281,6 +318,14 @@ ipcMain.handle('glkvm:login-password', async event => {
     if (entry.window.isDestroyed() || deviceSender(event) !== entry || entry.device !== device) return null;
     return password;
   } catch { return null; }
+});
+
+ipcMain.on('glkvm:window-action', (event, action) => {
+  const entry = deviceSender(event);
+  if (!entry || windows.get(entry.device.id) !== entry || !entry.options) return;
+  if (action === 'close') entry.window.close();
+  else if (action === 'minimize') entry.window.minimize();
+  else if (action === 'fullscreen') entry.window.setFullScreen(!entry.window.isFullScreen());
 });
 
 ipcMain.on('glkvm:ready', event => { const entry = deviceSender(event); if (entry) sendMode(entry); });
@@ -309,6 +354,7 @@ ipcMain.on('glkvm:video-size', (event, size) => {
   entry.videoSize = { width: size.width, height: size.height };
   installMenu();
   const win = entry.window;
+  if (entry.options) return;
   win.setAspectRatio(ratio);
   if (win.isFullScreen()) return;
   const work = screen.getDisplayMatching(win.getBounds()).workArea;

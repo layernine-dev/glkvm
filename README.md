@@ -6,12 +6,12 @@ status bar, rounded corners, or shadow. The only default connection is
 `https://glkvm.local`; add your own devices in Settings. Existing saved connections
 are preserved.
 
-**The shared window always stays clean.** App settings and the original device
-interface open in separate windows. Opening either does not resize, replace,
-or decorate the KVM window. Sign-in forms and expired sessions also stay out of
-the shared view. Share the individual **GLKVM <name>** window in
-Teams or another meeting app, rather than the whole display or all app windows.
-No sharing session is started automatically.
+**⌘⇧O toggles the device interface in the same window.** It reveals the vendor
+controls, a title bar and window buttons; pressing it again returns to the
+clean desktop and restores its previous size and position. The window and stream
+are retained. App settings (⌘,) remain separate. When sharing the device window,
+its visible device settings are shared too. The menu bar identifies the focused
+device as **Device — <name>**. No sharing session starts automatically.
 
 ## Run and build
 
@@ -63,7 +63,7 @@ bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
 | --- | --- |
 | ⌘, | Open app settings |
 | ⌘1 … ⌘9 | Open or focus a configured connection |
-| ⌘⇧O | Open/focus the separate device settings window; close it if focused |
+| ⌘⇧O | Show/hide device settings and window decoration in the same window |
 | ⌘⇧M | Switch between controlling the desktop and dragging the window |
 | ⌘R | Reload the focused device |
 | ⌘W | Close the focused window |
@@ -104,8 +104,7 @@ session data. Removing all connections opens Settings at the next launch.
 The **Controls** page sets the default keyboard/mouse mode and app audio muting.
 Changing the default input mode also applies it to open KVM windows. The per-window
 menu toggle lasts until the window closes or that default changes. App audio
-muting does not turn on the device's own speaker setting. Device settings windows
-are always muted to avoid duplicate audio.
+muting does not turn on the device's own speaker setting. Hidden login helpers are always muted to avoid duplicate audio.
 
 Local settings are stored atomically in
 `~/Library/Application Support/GLKVM Clean/settings.json`. Renaming a connection
@@ -128,7 +127,7 @@ The local settings page has its own limited IPC bridge, a restrictive content
 security policy, and main-frame/sender checks. Settings contain only encrypted password data, protected by Electron safeStorage
 and the macOS keychain. Plaintext passwords are never returned to the settings page.
 Enter a password in App Settings and save. Pending sign-in retries in the
-background; a manually opened device settings window reloads to use it. A blank
+background; the hidden login helper reloads to use it. A blank
 field keeps an existing password; **Forget saved password** removes it on save.
 Changing a device address clears its saved password. Auto-login fills only the
 vendor login form in a hidden authentication window, once per page load. This
@@ -145,10 +144,10 @@ the **original** player at the window's full size, preserving its keyboard/mouse
 handlers and coordinates. View-only and move modes block remote input. Focus loss,
 mode changes, and disconnects release tracked keys and mouse buttons.
 
-A separate device settings window uses the same app session and starts its own
-vendor console/stream while open. Close it when finished to release that additional
-stream. Device settings synchronization follows the firmware's own behavior; some
-changes may require reloading the clean window.
+The device interface is revealed in place by disabling the clean-view CSS and
+input gate. Window buttons, a draggable title bar, and the shadow appear
+only in this mode. A hidden helper using the same session handles saved-password
+sign-in and closes when authenticated; it is never the visible settings surface.
 
 The adapter targets the observed GLKVM 1.10.1 release3 DOM (`#stream-window`,
 `#stream-box`, `#video-wrapper`, and `#stream-video` / `#stream-canvas`). Video
@@ -159,8 +158,8 @@ update. Rotated video and relative pointer lock have not been verified live.
 Unit tests cover persistence, validation, session isolation, navigation and
 certificate policy. Electron tests cover edge-to-edge moving video, login/logout,
 input and scroll delivery, coordinates after resizing, view-only blocking,
-key/button release, moving, reconnects, separate settings windows, preserved
-sharing-window bounds/title, and real settings IPC/save behavior.
+key/button release, moving, reconnects, integrated device controls, unchanged window identity, restored clean bounds,
+connection shortcuts and active-device menus, and real settings IPC/save behavior.
 
 Live video and settings require actual devices. A passing local capture or build
 does not prove sharing in a particular meeting app; Teams capture requires its

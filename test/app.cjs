@@ -32,8 +32,9 @@ server.listen(0, '127.0.0.1', async () => {
   assert.ok(address && typeof address !== 'string');
   const config = defaults();
   config.devices = [{ id: 'fixture', name: 'Fixture', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true }];
+  config.devices.push({ id: 'second', name: 'Second', origin: config.devices[0].origin.replace('127.0.0.1', 'localhost'), openAtStartup: false });
   await app.whenReady();
-  const stored = await prepareConfig({ ...config, devices: [{ ...config.devices[0], password: 'incorrect-fixture-secret' }] }, config, safeStorage);
+  const stored = await prepareConfig({ ...config, devices: [{ ...config.devices[0], password: 'incorrect-fixture-secret' }, config.devices[1]] }, config, safeStorage);
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(stored));
   require('../src/main.cjs');
   try {
@@ -98,18 +99,49 @@ server.listen(0, '127.0.0.1', async () => {
     clean.setAspectRatio(0);
     clean.setBounds(bounds);
     clean.setAspectRatio(640 / 360);
+    const originalId = clean.id;
+    const originalContents = clean.webContents.id;
+    const documentToken = await clean.webContents.executeJavaScript('window.documentToken = Math.random()');
+    for (let cycle = 0; cycle < 2; cycle++) {
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'O', modifiers: ['meta', 'shift'] });
+      clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'O', modifiers: ['meta', 'shift'] });
+      await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
+      assert.equal(await clean.webContents.executeJavaScript("getComputedStyle(document.querySelector('#toolbar')).visibility"), 'visible');
+      assert.equal(clean.hasShadow(), true);
+      assert.equal(await clean.webContents.executeJavaScript("document.querySelectorAll('#glkvm-title-bar button').length"), 3);
+      assert.equal(clean.id, originalId);
+      assert.equal(clean.webContents.id, originalContents);
+      assert.equal(BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')), false);
+      assert.ok(Menu.getApplicationMenu()?.items.some(item => item.label === 'Device — Fixture'));
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'O', modifiers: ['meta', 'shift'] });
+      clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'O', modifiers: ['meta', 'shift'] });
+      await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
+      assert.equal(await clean.webContents.executeJavaScript("getComputedStyle(document.querySelector('#toolbar')).visibility"), 'hidden');
+      assert.equal(clean.hasShadow(), false);
+      assert.deepEqual(clean.getBounds(), bounds);
+      assert.equal(await clean.webContents.executeJavaScript('window.documentToken'), documentToken);
+    }
     command('Device Settings…');
-    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Fixture — Device Settings'));
-    const consoleWindow = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture — Device Settings');
-    assert.ok(consoleWindow);
-    consoleWindow.focus();
-    await waitFor(() => consoleWindow.isFocused() && !globalShortcut.isRegistered('CommandOrControl+Shift+M'));
-    await waitFor(() => !consoleWindow.webContents.isLoading());
-    assert.equal(consoleWindow.webContents.session, clean.webContents.session);
-    assert.deepEqual(clean.getBounds(), bounds);
-    assert.equal(clean.getTitle(), 'GLKVM Fixture');
-    assert.equal(await clean.webContents.executeJavaScript("getComputedStyle(document.querySelector('#toolbar')).visibility"), 'hidden');
-    assert.equal(await consoleWindow.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"), false);
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
+    await clean.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar button[aria-label=\"Minimize window\"]').click()");
+    await waitFor(() => clean.isMinimized());
+    clean.restore(); clean.focus();
+    await waitFor(() => clean.isFocused());
+    command('Device Settings…');
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
+    // App shortcuts also work after remote editing has disabled menu accelerators.
+    clean.webContents.setIgnoreMenuShortcuts(true);
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '2', modifiers: ['meta'] });
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Second'));
+    const second = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Second');
+    assert.ok(second);
+    await waitFor(() => second.isFocused() && !second.webContents.isLoading());
+    assert.ok(Menu.getApplicationMenu()?.items.some(item => item.label === 'Device — Second'));
+    second.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['meta'] });
+    await waitFor(() => clean.isFocused());
+    assert.ok(globalShortcut.isRegistered('CommandOrControl+1'));
+    assert.ok(globalShortcut.isRegistered('CommandOrControl+2'));
+    second.close();
     command('Settings…');
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'));
     const settings = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings');
@@ -127,7 +159,6 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(saved.ok, true);
     await waitFor(() => clean.webContents.executeJavaScript("!document.documentElement.hasAttribute('data-glkvm-control')"));
     assert.equal(clean.getTitle(), 'GLKVM Renamed');
-    assert.equal(consoleWindow.getTitle(), 'Renamed — Device Settings');
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).devices[0].name, 'Renamed');
     clean.focus();
     await waitFor(() => clean.isFocused());
@@ -141,9 +172,9 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(clean.isDestroyed(), false);
     const empty = { ...edited, devices: [] };
     assert.equal((await settings.webContents.executeJavaScript(`window.settings.save(${JSON.stringify(empty)})`)).ok, true);
-    await waitFor(() => clean.isDestroyed() && consoleWindow.isDestroyed());
+    await waitFor(() => clean.isDestroyed());
     assert.equal(settings.isDestroyed(), false);
-    console.log('PASS: app startup, separate login and automatic clean reconnect, isolated settings bridge, separate vendor window, preserved sharing bounds/title, shared login session, saved settings, live mode/name changes, rejected invalid save, connection removal');
+    console.log('PASS: app startup, separate login and automatic clean reconnect, isolated settings bridge, integrated options without reload or window replacement, restored bounds, local connection shortcuts, saved settings, live mode/name changes, rejected invalid save, connection removal');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
   finally { server.close(); fs.rmSync(directory, { recursive: true, force: true }); }
