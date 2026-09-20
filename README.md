@@ -1,0 +1,160 @@
+# GLKVM Clean
+
+A macOS app for frameless GLKVM remote control and screen sharing. Each device
+has a separate **GLKVM <name>** window with no title bar, traffic lights, toolbar,
+status bar, rounded corners, or shadow. The only default connection is
+`https://glkvm.local`; add your own devices in Settings. Existing saved connections
+are preserved.
+
+**The shared window always stays clean.** App settings and the original device
+interface open in separate windows. Opening either does not resize, replace,
+or decorate the KVM window. Sign-in forms and expired sessions also stay out of
+the shared view. Share the individual **GLKVM <name>** window in
+Teams or another meeting app, rather than the whole display or all app windows.
+No sharing session is started automatically.
+
+## Run and build
+
+```sh
+cd ~/dev/glkvm
+bun install
+bun start
+bun run check
+bun run test
+bun run test:browser
+bun run build
+```
+
+The standalone app is produced at
+`dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. It can be copied
+to `~/Applications`. Increase the patch version in `package.json` for shipped
+code, behavior, or asset changes. Documentation-only and test-only changes do
+not need a version bump.
+
+Builds are signed with the local Keychain identity
+`Apple Development: Uwe Schwarz (54988A349V)`, including Electron helpers and
+frameworks, with Hardened Runtime and only the JIT entitlement required by V8.
+The build fails if the identity is missing or signature verification fails;
+it does not fall back to an ad hoc signature. App and helper bundle identifiers
+and the signing identity stay stable so macOS can recognize future updates.
+A local-network usage description is included for macOS privacy prompts.
+
+This is a local development signature, without notarization or an upload to Apple.
+Switching from the original ad hoc build may require a one-time permission prompt.
+Code signing preserves app identity; it does not grant privacy permissions or
+prevent macOS from requesting consent under its own policies. To verify an installed
+copy, run:
+
+```sh
+bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
+```
+
+## Use
+
+1. Open GLKVM Clean while connected to your LAN or VPN network.
+2. Saved passwords sign in in the background; only the clean desktop window opens.
+   For manual sign-in or a second factor, open Device Settings with ⌘⇧O.
+   The clean window reconnects once authentication succeeds. Sessions are isolated by connection ID and address.
+3. Click the video to focus the remote player, then use the keyboard and mouse.
+4. Select **GLKVM <name>** in your meeting
+   app's window picker.
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘, | Open app settings |
+| ⌘1 … ⌘9 | Open or focus a configured connection |
+| ⌘⇧O | Open/focus the separate device settings window; close it if focused |
+| ⌘⇧I | Toggle keyboard and mouse in the focused clean window |
+| ⌘⇧M | Toggle move mode: drag the video, then toggle again to resume control |
+| ⌘R | Reload the focused device |
+| ⌘W | Close the focused window |
+| ⌘⇧C | Center the focused window |
+| ⌘Q | Quit the app |
+
+In view-only mode, drag anywhere on the video to move its window. In control
+mode, use move mode to reposition it. Drag a window edge to resize it. The
+**Window** menu offers fixed widths, fullscreen, and always-on-top. No move-mode
+badge or controls are drawn over the shared video; the menu shows the mode.
+
+Shortcuts apply while the app is active. Documented app/window shortcuts remain
+local. Editing shortcuts such as ⌘C and ⌘V pass through to the remote keyboard
+while the clean player is active; this does not synchronize the local clipboard.
+The original device settings include keyboard layout, Command/Ctrl swapping,
+mouse mode, video quality, and the vendor's other configuration panels.
+
+## Settings and connections
+
+Use **GLKVM Clean → Settings…** to add, rename, or remove connections. Addresses
+must be full HTTP or HTTPS device origins, without credentials, paths, or query
+strings. Each connection can open at startup. Save changes before using **Open**.
+Saving an address change closes the old connection; use **Open** to connect to
+the new address. Removing a connection closes its windows but retains its local
+session data. Removing all connections opens Settings at the next launch.
+
+The **Controls** page sets the default keyboard/mouse mode and app audio muting.
+Changing the default input mode also applies it to open KVM windows. The per-window
+menu toggle lasts until the window closes or that default changes. App audio
+muting does not turn on the device's own speaker setting. Device settings windows
+are always muted to avoid duplicate audio.
+
+Local settings are stored atomically in
+`~/Library/Application Support/GLKVM Clean/settings.json`. Renaming a connection
+retains its login session. Changing its address uses a separate session partition;
+returning to the same saved connection/address restores its prior session. Chrome
+sessions remain separate.
+
+## Certificates and permissions
+
+For an untrusted certificate, the app shows the host, validation error, subject,
+and SHA-256 fingerprint. Trust requires an explicit decision for that exact host
+and certificate. A changed untrusted certificate prompts again. System and
+Chrome trust settings are not modified.
+
+Remote renderers are sandboxed with context isolation and no Node or settings
+bridge. Navigation is restricted to the configured device origin. The app blocks
+arbitrary popup windows, downloads, and local camera, microphone, and clipboard
+permissions. Pointer lock is allowed for the vendor's relative mouse mode.
+The local settings page has its own limited IPC bridge, a restrictive content
+security policy, and main-frame/sender checks. Settings contain only encrypted password data, protected by Electron safeStorage
+and the macOS keychain. Plaintext passwords are never returned to the settings page.
+Enter a password in App Settings and save. Pending sign-in retries in the
+background; a manually opened device settings window reloads to use it. A blank
+field keeps an existing password; **Forget saved password** removes it on save.
+Changing a device address clears its saved password. Auto-login fills only the
+vendor login form in a hidden authentication window, once per page load. This
+window closes after success and never appears automatically. Device Settings
+uses the same login session and is shown only on explicit request.
+Second-factor prompts require manual completion. An incorrect password is not
+automatically retried; correct it in Settings and save.
+
+## Implementation and validation
+
+Electron provides Chromium/WebRTC and the frameless native windows. The vendor
+page establishes its own connection and reconnects it. An isolated preload presents
+the **original** player at the window's full size, preserving its keyboard/mouse
+handlers and coordinates. View-only and move modes block remote input. Focus loss,
+mode changes, and disconnects release tracked keys and mouse buttons.
+
+A separate device settings window uses the same app session and starts its own
+vendor console/stream while open. Close it when finished to release that additional
+stream. Device settings synchronization follows the firmware's own behavior; some
+changes may require reloading the clean window.
+
+The adapter targets the observed GLKVM 1.10.1 release3 DOM (`#stream-window`,
+`#stream-box`, `#video-wrapper`, and `#stream-video` / `#stream-canvas`). Video
+tracks show a waiting message after disconnection; direct canvas transport relies
+on the vendor's own reconnect behavior. Firmware changes can require an adapter
+update. Rotated video and relative pointer lock have not been verified live.
+
+Unit tests cover persistence, validation, session isolation, navigation and
+certificate policy. Electron tests cover edge-to-edge moving video, login/logout,
+input and scroll delivery, coordinates after resizing, view-only blocking,
+key/button release, moving, reconnects, separate settings windows, preserved
+sharing-window bounds/title, and real settings IPC/save behavior.
+
+Live video and settings require actual devices. A passing local capture or build
+does not prove sharing in a particular meeting app; Teams capture requires its
+own live acceptance check.
+
+References: [Electron window interactions](https://www.electronjs.org/docs/latest/tutorial/custom-window-interactions),
+[GLKVM console guide](https://docs.gl-inet.com/kvm/en/user_guide/gl-rm1/console_guide/).

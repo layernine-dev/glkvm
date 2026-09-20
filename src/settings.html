@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>GLKVM Clean Settings</title>
+  <link rel="stylesheet" href="settings.css">
+  <script src="settings.js" defer></script>
+</head>
+<body>
+  <aside aria-label="Settings sections">
+    <div class="app-name">GLKVM Clean</div>
+    <button class="nav selected" id="connections-tab" aria-controls="connections" aria-pressed="true">Connections</button>
+    <button class="nav" id="controls-tab" aria-controls="controls" aria-pressed="false">Controls</button>
+  </aside>
+  <main>
+    <form id="settings-form" novalidate>
+      <div class="pages">
+        <section id="connections" aria-labelledby="connections-title">
+          <header><h1 id="connections-title">Connections</h1><p>Open each device in its own frameless window.</p></header>
+          <div id="device-list"></div>
+          <button type="button" id="add-device">Add connection</button>
+          <p class="hint">Use a LAN or VPN address. Passwords are encrypted using your macOS keychain. Leave a saved password blank to keep it; changing the address clears it. Saving a password retries sign-in in the background.</p>
+        </section>
+        <section id="controls" aria-labelledby="controls-title" hidden>
+          <header><h1 id="controls-title">Controls</h1><p>Choose how your device windows behave.</p></header>
+          <div class="group">
+            <label class="setting-row"><span><strong>Keyboard and mouse</strong><small>Control the remote computer in the clean view.</small></span><input id="control-enabled" type="checkbox" role="switch"></label>
+            <label class="setting-row"><span><strong>Mute device audio</strong><small>Keep the windows silent, including the device interface.</small></span><input id="muted" type="checkbox" role="switch"></label>
+          </div>
+          <h2>Keyboard shortcuts</h2>
+          <dl class="shortcuts group">
+            <div><dt>App settings</dt><dd>⌘,</dd></div>
+            <div><dt>Open / close device settings</dt><dd>⌘⇧O</dd></div>
+            <div><dt>Enable / disable remote control</dt><dd>⌘⇧I</dd></div>
+            <div><dt>Move window mode</dt><dd>⌘⇧M</dd></div>
+            <div><dt>Open a connection</dt><dd>⌘1 … ⌘9</dd></div>
+            <div><dt>Reload device</dt><dd>⌘R</dd></div>
+          </dl>
+          <p class="hint">In move mode, drag the video to reposition the window. Press ⌘⇧M again to resume control. In view-only mode, you can always drag the video.</p>
+          <p class="hint">Device settings open in a separate window. The shared KVM window always stays clean. Camera, microphone and downloads remain unavailable.</p>
+        </section>
+      </div>
+      <footer><span id="save-status" role="status" aria-live="polite"></span><button type="submit" class="primary" id="save">Save changes</button></footer>
+    </form>
+  </main>
+</body>
+</html>
