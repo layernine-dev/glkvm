@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>GLKVM test fixture</title>
+<style>
+body { margin: 0; background: #ed11aa; }
+#stream-window { position:relative; width:640px; height:360px; overflow:hidden; }
+#stream-box { position:relative; width:100%;height:100%; }
+#video-wrapper { position:absolute; inset:0; z-index:2; }
+#stream-video { width:100%;height:100%; }
+</style></head>
+<body>
+  <div id="login" class="auth-form-container"><form class="login-form" onsubmit="return false"><label>Password <input id="password" type="password"></label></form><button class="operation-btn" onclick="if(document.querySelector('#password').value === 'fixture-secret') {localStorage.setItem('fixture-auth', 'true'); window.connect()}">Login</button></div>
+  <div id="stream-window"><div id="stream-box" tabindex="-1"><div id="video-wrapper"></div><video id="stream-video"></video></div></div>
+  <script>
+    window.inputEvents = 0;
+    window.mouseEvents = 0;
+    window.keyReleases = 0;
+    window.mouseReleases = 0;
+    window.scrollEvents = 0;
+    window.lastPoint = null;
+    document.addEventListener('keydown', () => window.inputEvents++);
+    document.addEventListener('mousedown', () => window.mouseEvents++);
+    const box = document.querySelector('#stream-box');
+    box.addEventListener('keydown', e => { e.preventDefault(); });
+    box.addEventListener('keyup', () => window.keyReleases++);
+    box.addEventListener('mouseup', () => window.mouseReleases++);
+    box.addEventListener('wheel', e => { e.preventDefault(); window.scrollEvents++; });
+    box.addEventListener('mousemove', e => {
+      const rect = e.target.getBoundingClientRect();
+      window.lastPoint = { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height, target: e.target.id };
+    });
+    box.addEventListener('click', () => box.focus());
+    let frame = 0;
+    window.connect = (width = 640, height = 360) => {
+      document.querySelector('#login')?.remove();
+      document.querySelector('#stream-video')?.remove();
+      let toolbar = document.querySelector('#toolbar');
+      if (!toolbar) {
+        toolbar = document.createElement('div'); toolbar.id = 'toolbar';
+        toolbar.textContent = 'Toolbox / Session / Status'; document.body.prepend(toolbar);
+      }
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d');
+      const render = () => {
+        context.fillStyle = '#12c976'; context.fillRect(0, 0, width, height);
+        context.fillStyle = '#ffffff'; context.fillRect((frame++ % 50), 0, 10, 10);
+      };
+      render();
+      const timer = setInterval(render, 50);
+      const video = document.createElement('video'); video.id = 'stream-video'; video.autoplay = true; video.muted = true;
+      video.srcObject = canvas.captureStream(20); box.append(video);
+      window.disconnect = () => { clearInterval(timer); video.srcObject.getTracks().forEach(track => track.stop()); };
+    };
+    window.logout = () => {
+      window.disconnect(); document.querySelector('#stream-video').remove(); document.querySelector('#toolbar').remove();
+      const login = document.createElement('div'); login.id = 'login'; login.innerHTML = 'Login required <input id="password" type="password">'; document.body.append(login);
+    };
+    if (localStorage.getItem('fixture-auth') === 'true') window.connect();
+  </script>
+</body>
+</html>
