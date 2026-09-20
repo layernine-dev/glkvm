@@ -64,8 +64,7 @@ bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
 | ⌘, | Open app settings |
 | ⌘1 … ⌘9 | Open or focus a configured connection |
 | ⌘⇧O | Open/focus the separate device settings window; close it if focused |
-| ⌘⇧I | Toggle keyboard and mouse in the focused clean window |
-| ⌘⇧M | Toggle move mode: drag the video, then toggle again to resume control |
+| ⌘⇧M | Switch between controlling the desktop and dragging the window |
 | ⌘R | Reload the focused device |
 | ⌘W | Close the focused window |
 | ⌘⇧C | Center the focused window |
@@ -73,10 +72,21 @@ bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
 
 In view-only mode, drag anywhere on the video to move its window. In control
 mode, use move mode to reposition it. Drag a window edge to resize it. The
-**Window** menu offers fixed widths, fullscreen, and always-on-top. No move-mode
+**Window** menu offers local window sizes, fullscreen, and always-on-top. No move-mode
 badge or controls are drawn over the shared video; the menu shows the mode.
 
-Shortcuts apply while the app is active. Documented app/window shortcuts remain
+**Window → Window Size** sets only the local window size from the current video
+resolution: 0.25×, 0.5×, 0.75×, 1×, 1.5×, or 2×. Each item shows the resulting
+pixel dimensions; **1× (1:1 pixels)** maps one video pixel to one window backing
+pixel, accounting for the current display's Retina scale factor. macOS display
+scaling can subsequently resample the desktop. The current matching size is checked.
+Sizes outside the display's available area, above 6K, or below the minimum
+160×90 logical points are disabled instead of silently reduced. Moving between
+displays updates the choices. These controls do not change the remote resolution.
+
+Shortcuts apply while the app is active. The mode toggle is registered
+with macOS only while a clean window has focus, so dragging or clicking the
+remote desktop does not depend on the embedded player's keyboard focus. Documented app/window shortcuts remain
 local. Editing shortcuts such as ⌘C and ⌘V pass through to the remote keyboard
 while the clean player is active; this does not synchronize the local clipboard.
 The original device settings include keyboard layout, Command/Ctrl swapping,

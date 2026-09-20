@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -68,10 +68,42 @@ server.listen(0, '127.0.0.1', async () => {
     const bounds = clean.getBounds();
     clean.focus();
     await waitFor(() => clean.isFocused());
+    // Mode shortcuts must work before/after player focus and native dragging.
+    for (let cycle = 0; cycle < 2; cycle++) {
+      /** @type {Electron.KeyboardInputEvent['modifiers']} */
+      const modifiers = ['meta', 'shift'];
+      await clean.webContents.executeJavaScript("document.querySelector('#stream-box').focus()");
+      const inputBefore = await clean.webContents.executeJavaScript('window.inputEvents');
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers });
+      clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'M', modifiers });
+      await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-drag')"));
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers: [...modifiers, 'isautorepeat'] });
+      assert.equal(await clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-drag')"), true);
+      clean.setPosition(bounds.x + 20, bounds.y + 20);
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers });
+      clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'M', modifiers });
+      await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-control')"));
+      assert.equal(await clean.webContents.executeJavaScript('window.inputEvents'), inputBefore);
+    }
+    assert.ok(globalShortcut.isRegistered('CommandOrControl+Shift+M'));
+    const windowMenu = Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu;
+    assert.ok(!windowMenu?.items.some(item => ['Video Scale', 'Resolution Presets', '640 px Wide'].includes(item.label)));
+    const sizes = windowMenu?.items.find(item => item.label === 'Window Size')?.submenu;
+    assert.equal(sizes?.items.length, 6);
+    const nativeSize = sizes?.items.find(item => item.label.includes('(1:1 pixels)'));
+    assert.ok(nativeSize?.enabled);
+    nativeSize.click(undefined, clean, undefined);
+    const density = screen.getDisplayMatching(clean.getBounds()).scaleFactor;
+    assert.deepEqual(clean.getContentSize(), [Math.round(640 / density), Math.round(360 / density)]);
+    clean.setAspectRatio(0);
+    clean.setBounds(bounds);
+    clean.setAspectRatio(640 / 360);
     command('Device Settings…');
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Fixture — Device Settings'));
     const consoleWindow = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture — Device Settings');
     assert.ok(consoleWindow);
+    consoleWindow.focus();
+    await waitFor(() => consoleWindow.isFocused() && !globalShortcut.isRegistered('CommandOrControl+Shift+M'));
     await waitFor(() => !consoleWindow.webContents.isLoading());
     assert.equal(consoleWindow.webContents.session, clean.webContents.session);
     assert.deepEqual(clean.getBounds(), bounds);
@@ -97,6 +129,13 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(clean.getTitle(), 'GLKVM Renamed');
     assert.equal(consoleWindow.getTitle(), 'Renamed — Device Settings');
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).devices[0].name, 'Renamed');
+    clean.focus();
+    await waitFor(() => clean.isFocused());
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers: ['meta', 'shift'] });
+    clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'M', modifiers: ['meta', 'shift'] });
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-control')"));
+    settings.focus();
+    await waitFor(() => settings.isFocused());
     const invalid = { ...edited, devices: [{ ...edited.devices[0], origin: 'file:///etc' }] };
     assert.equal((await settings.webContents.executeJavaScript(`window.settings.save(${JSON.stringify(invalid)})`)).ok, false);
     assert.equal(clean.isDestroyed(), false);
