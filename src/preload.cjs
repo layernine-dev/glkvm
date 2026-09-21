@@ -77,10 +77,6 @@ function update() {
   const root = document.documentElement;
   root.toggleAttribute('data-glkvm-options', options);
   if (titleLabel) titleLabel.textContent = `${deviceName} — Device Settings`;
-  if (options) {
-    for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
-    return;
-  }
   const next = document.querySelector('#stream-video, #stream-canvas');
   const nextSource = next instanceof HTMLVideoElement || next instanceof HTMLCanvasElement ? next : null;
   const nextPlayer = nextSource?.closest('#stream-box');
@@ -99,6 +95,14 @@ function update() {
   } else ready = false;
   if (!player || signingIn) { hasShownVideo = false; ready = false; }
   else if (ready) hasShownVideo = true;
+  if (ready && player) {
+    const size = `${width}x${height}`;
+    if (size !== lastSize) { lastSize = size; ipcRenderer.send('glkvm:video-size', { width, height }); }
+  }
+  if (options) {
+    for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
+    return;
+  }
   root.setAttribute('data-glkvm-clean', '');
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
@@ -116,8 +120,6 @@ function update() {
     const scale = Math.min(window.innerWidth / width, window.innerHeight / height);
     root.style.setProperty('--glkvm-width', `${width * scale}px`);
     root.style.setProperty('--glkvm-height', `${height * scale}px`);
-    const size = `${width}x${height}`;
-    if (size !== lastSize) { lastSize = size; ipcRenderer.send('glkvm:video-size', { width, height }); }
   }
   const streaming = hasShownVideo && ready;
   if (lastStreaming !== streaming) {

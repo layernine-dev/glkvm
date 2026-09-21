@@ -180,7 +180,7 @@ server.listen(0, '127.0.0.1', async () => {
     await settings.webContents.executeJavaScript(`(async () => {
       const value = await window.settings.load();
       value.devices[0].startMode = 'options-enabled';
-      value.devices[0].windowScale = 1.5;
+      value.devices[0].windowScale = 2;
       const result = await window.settings.save(value);
       if (!result.ok) throw new Error(result.error);
     })()`);
@@ -194,15 +194,21 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     assert.equal(reopened.hasShadow(), true);
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640"));
+    const optionsDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
+    await waitFor(() => {
+      const [width, height] = reopened.getContentSize();
+      return width === Math.max(720, Math.round(640 * 2 / optionsDensity))
+        && height === Math.max(500, Math.round(360 * 2 / optionsDensity));
+    });
     reopened.focus();
     await waitFor(() => reopened.isFocused());
     command('Device Settings…');
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
     const reopenedDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
-    assert.deepEqual(reopened.getContentSize(), [Math.round(640 * 1.5 / reopenedDensity), Math.round(360 * 1.5 / reopenedDensity)]);
+    assert.deepEqual(reopened.getContentSize(), [Math.round(640 * 2 / reopenedDensity), Math.round(360 * 2 / reopenedDensity)]);
     const persisted = JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8'));
     assert.equal(persisted.devices[0].startMode, 'options-enabled');
-    assert.equal(persisted.devices[0].windowScale, 1.5);
+    assert.equal(persisted.devices[0].windowScale, 2);
     const invalid = { ...edited, devices: [{ ...edited.devices[0], origin: 'file:///etc' }] };
     assert.equal((await settings.webContents.executeJavaScript(`window.settings.save(${JSON.stringify(invalid)})`)).ok, false);
     assert.equal(reopened.isDestroyed(), false);
