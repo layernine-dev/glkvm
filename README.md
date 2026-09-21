@@ -169,3 +169,5 @@ own live acceptance check.
 
 References: [Electron window interactions](https://www.electronjs.org/docs/latest/tutorial/custom-window-interactions),
 [GLKVM console guide](https://docs.gl-inet.com/kvm/en/user_guide/gl-rm1/console_guide/).
+
+Each connection has a **Start mode** (Window-decoration-less or Options-enabled) and **Window resolution** (Automatic, 0.25×, 0.5×, 0.75×, 1×, 1.5×, 2×). These preferences apply when reopening the connection. Scaling uses source video pixels and display density; sizes that exceed the display work area or 6K limit use automatic sizing. Options mode keeps the selected video size for returning to the clean view with ⌘⇧O. Existing connections default to the clean view and automatic sizing.

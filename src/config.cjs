@@ -1,12 +1,13 @@
 const fs = require('node:fs');
 const { randomUUID, createHash } = require('node:crypto');
+const { scales } = require('./window-sizes.cjs');
 const { devices } = require('./devices.cjs');
 
-/** @typedef {{id: string, name: string, origin: string, openAtStartup: boolean, encryptedPassword?: string}} Device */
+/** @typedef {{id: string, name: string, origin: string, openAtStartup: boolean, startMode?: string, windowScale?: number | null, encryptedPassword?: string}} Device */
 /** @typedef {{version: number, devices: Device[], controlEnabled: boolean, muted: boolean}} Config */
 /** @returns {Config} */
 function defaults() {
-  return { version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true })), controlEnabled: true, muted: true };
+  return { version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true, startMode: 'window-decoration-less', windowScale: null })), controlEnabled: true, muted: true };
 }
 
 /** @param {unknown} value @returns {Config} */
@@ -29,8 +30,12 @@ function validateConfig(value) {
     if (origins.has(url.origin)) throw new Error('This device address is already in the list.');
     origins.add(url.origin);
     if (typeof device.openAtStartup !== 'boolean') throw new Error('Invalid startup setting.');
+    const startMode = device.startMode === undefined ? 'window-decoration-less' : device.startMode;
+    const windowScale = device.windowScale === undefined ? null : device.windowScale;
+    if (!['window-decoration-less', 'options-enabled'].includes(startMode)) throw new Error('Invalid start mode.');
+    if (windowScale !== null && !scales.includes(windowScale)) throw new Error('Invalid window resolution.');
     if (device.encryptedPassword !== undefined && (typeof device.encryptedPassword !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(device.encryptedPassword) || device.encryptedPassword.length > 32768)) throw new Error('Invalid encrypted password.');
-    return { ...(device.encryptedPassword ? { encryptedPassword: device.encryptedPassword } : {}), id, name: device.name.trim(), origin: url.origin, openAtStartup: device.openAtStartup };
+    return { ...(device.encryptedPassword ? { encryptedPassword: device.encryptedPassword } : {}), id, name: device.name.trim(), origin: url.origin, startMode, windowScale, openAtStartup: device.openAtStartup };
   });
   return { version: 1, devices: normalized, controlEnabled: input.controlEnabled, muted: input.muted };
 }
