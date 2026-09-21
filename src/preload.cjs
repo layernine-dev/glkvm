@@ -17,6 +17,9 @@ let controlEnabled = false;
 let moving = false;
 let options = false;
 let deviceName = '';
+/** @type {{width: number, height: number} | null} */
+let videoPoints = null;
+let lastChrome = '';
 /** @type {HTMLDivElement} */
 let titleBar;
 /** @type {HTMLSpanElement} */
@@ -44,7 +47,9 @@ ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
   controlEnabled = mode?.controlEnabled === true;
   moving = mode?.moving === true;
+  if (options !== (mode?.options === true)) lastChrome = '';
   options = mode?.options === true;
+  videoPoints = mode?.videoPoints || null;
   deviceName = typeof mode?.name === 'string' ? mode.name : '';
   if (surface) update();
 });
@@ -76,6 +81,11 @@ for (const name of [
 function update() {
   const root = document.documentElement;
   root.toggleAttribute('data-glkvm-options', options);
+  root.toggleAttribute('data-glkvm-sized', options && !!videoPoints);
+  if (videoPoints) {
+    root.style.setProperty('--glkvm-options-width', `${videoPoints.width}px`);
+    root.style.setProperty('--glkvm-options-height', `${videoPoints.height}px`);
+  }
   if (titleLabel) titleLabel.textContent = `${deviceName} — Device Settings`;
   const next = document.querySelector('#stream-video, #stream-canvas');
   const nextSource = next instanceof HTMLVideoElement || next instanceof HTMLCanvasElement ? next : null;
@@ -101,6 +111,21 @@ function update() {
   }
   if (options) {
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
+    const frame = document.querySelector('#stream-window');
+    if (ready && frame) {
+      const rect = frame.getBoundingClientRect();
+      let footer = 0;
+      // Measure visible footer/status content, not unused viewport space.
+      for (const element of document.body.querySelectorAll('*')) {
+        if (frame.contains(element) || element.contains(frame) || element.children.length) continue;
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        if (box.width && box.height && style.visibility !== 'hidden' && box.top >= rect.bottom - 1) footer = Math.max(footer, box.height);
+      }
+      const chrome = { width: 0, height: Math.max(32, rect.top) + footer };
+      const key = JSON.stringify(chrome);
+      if (key !== lastChrome) { lastChrome = key; ipcRenderer.send('glkvm:options-chrome', chrome); }
+    }
     return;
   }
   root.setAttribute('data-glkvm-clean', '');
@@ -145,6 +170,18 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     #glkvm-clean-surface, #glkvm-clean-drag, #glkvm-title-bar { display: none; }
     html[data-glkvm-options] { padding-top: 32px !important; box-sizing: border-box !important; }
+    html[data-glkvm-options][data-glkvm-sized] #stream-window,
+    html[data-glkvm-options][data-glkvm-sized] #stream-box {
+      width: var(--glkvm-options-width) !important; height: var(--glkvm-options-height) !important;
+      min-width: 0 !important; min-height: 0 !important; max-width: none !important; max-height: none !important;
+      flex: none !important; padding: 0 !important; border: 0 !important; transform: none !important;
+    }
+    html[data-glkvm-options][data-glkvm-sized] #stream-video,
+    html[data-glkvm-options][data-glkvm-sized] #stream-canvas,
+    html[data-glkvm-options][data-glkvm-sized] #video-wrapper {
+      width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important;
+      padding: 0 !important; border: 0 !important; object-fit: contain !important; transform: none !important;
+    }
     html[data-glkvm-options] #glkvm-title-bar {
       display: block; position: fixed; top: 0; left: 0; right: 0; height: 32px;
       z-index: 2147483647; background: #252525; color: #eee; text-align: center;

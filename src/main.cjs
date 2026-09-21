@@ -10,7 +10,7 @@ const { scales, windowSize } = require('./window-sizes.cjs');
 
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, videoSize: {width: number, height: number} | null}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -35,7 +35,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, name: entry.device.name });
+  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name });
 }
 /** @param {Entry} entry */
 function releaseInput(entry) { entry.window.webContents.send('glkvm:release-input'); }
@@ -102,8 +102,14 @@ function resizeWindow(entry, size, scale) {
   const display = screen.getDisplayMatching(win.getBounds());
   const fitted = windowSize(size, scale, display.workArea, display.scaleFactor);
   if (!fitted.fits) return;
+  entry.selectedScale = scale;
+  if (entry.options && !entry.chrome) { sendMode(entry); return; }
+  const width = entry.options ? Math.max(720, fitted.width + (entry.chrome?.width || 0)) : fitted.width;
+  const height = entry.options ? Math.max(500, fitted.height + (entry.chrome?.height || 0)) : fitted.height;
+  if (width > display.workArea.width || height > display.workArea.height) return;
   win.setAspectRatio(0);
-  win.setContentSize(Math.max(entry.options ? 720 : 160, fitted.width), Math.max(entry.options ? 500 : 90, fitted.height));
+  win.setContentSize(width, height);
+  sendMode(entry);
   if (!entry.options) win.setAspectRatio(fitted.width / fitted.height);
   const bounds = win.getBounds();
   const work = display.workArea;
@@ -154,7 +160,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, options: false, cleanBounds: null, videoSize: null };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null };
   collection.set(device.id, entry);
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
   win.webContents.setAudioMuted(consoleWindow || config.muted);
@@ -200,6 +206,7 @@ function setDeviceOptions(entry, enabled) {
   const win = entry.window;
   releaseInput(entry);
   entry.options = enabled;
+  entry.chrome = null;
   win.webContents.setIgnoreMenuShortcuts(false);
   win.setAspectRatio(0);
   if (entry.options) {
@@ -239,7 +246,8 @@ function showSettings() {
 
 function installMenu() {
   const entry = focusedEntry();
-  const clean = entry && windows.get(entry.device.id) === entry && !entry.options;
+  const viewer = entry && windows.get(entry.device.id) === entry;
+  const clean = viewer && !entry.options;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: entry ? `Device — ${entry.device.name}` : 'Device', submenu: [
@@ -255,19 +263,32 @@ function installMenu() {
     { label: 'Window', role: 'windowMenu', submenu: [
       { role: 'minimize' },
       { label: 'Center', accelerator: 'CmdOrCtrl+Shift+C', click: () => BrowserWindow.getFocusedWindow()?.center() },
-      { label: 'Window Size', enabled: !!clean && !!entry.videoSize, submenu: scales.map(scale => {
-        const size = clean ? entry.videoSize : null;
+      { label: 'Window Size', enabled: !!viewer && !!entry.videoSize, submenu: scales.map(scale => {
+        const size = viewer ? entry.videoSize : null;
         const display = screen.getDisplayMatching(entry?.window.getBounds() || screen.getPrimaryDisplay().bounds);
         const target = size ? windowSize(size, scale, display.workArea, display.scaleFactor) : null;
-        const current = clean ? entry.window.getContentSize() : [];
+        const current = viewer ? entry.window.getContentSize() : [];
+        if (target && entry?.options) {
+          target.width = Math.max(720, target.width + (entry.chrome?.width || 0));
+          target.height = Math.max(500, target.height + (entry.chrome?.height || 0));
+          target.fits = target.fits && !!entry.chrome && target.width <= display.workArea.width && target.height <= display.workArea.height;
+        }
         const pixels = size ? ` — ${Math.round(size.width * scale)} × ${Math.round(size.height * scale)} px` : '';
         const native = scale === 1 ? ' (1:1 pixels)' : '';
         const unavailable = target && !target.fits ? ' — does not fit' : '';
         return {
           label: `${scale}×${pixels}${native}${unavailable}`, type: /** @type {'checkbox'} */ ('checkbox'),
-          enabled: !!target?.fits && !!clean && !entry.window.isFullScreen(),
-          checked: !!target && current[0] === target.width && current[1] === target.height,
-          click: () => { if (clean && entry.videoSize) resizeWindow(entry, entry.videoSize, scale); },
+          enabled: !!target?.fits && !!viewer && !entry.window.isFullScreen(),
+          checked: !!target && (!entry?.options || entry.selectedScale === scale) && current[0] === target.width && current[1] === target.height,
+          click: () => {
+            if (viewer && entry.videoSize) {
+              if (entry.options && entry.cleanBounds) {
+                const video = windowSize(entry.videoSize, scale, display.workArea, display.scaleFactor);
+                entry.cleanBounds = { ...entry.cleanBounds, width: video.width, height: video.height };
+              }
+              resizeWindow(entry, entry.videoSize, scale);
+            }
+          },
         };
       }) },
       { label: 'Toggle Always on Top', click: () => { const win = BrowserWindow.getFocusedWindow(); if (win) win.setAlwaysOnTop(!win.isAlwaysOnTop()); } },
@@ -361,24 +382,31 @@ ipcMain.on('glkvm:console-connected', event => {
   if (consoleEntry.background) consoleEntry.window.close();
 });
 ipcMain.on('glkvm:stream-state', (event, streaming) => { const entry = deviceSender(event); if (entry) entry.streaming = streaming === true; });
+ipcMain.on('glkvm:options-chrome', (event, chrome) => {
+  const entry = deviceSender(event);
+  if (!entry || windows.get(entry.device.id) !== entry || !entry.options) return;
+  if (![chrome?.width, chrome?.height].every(value => Number.isFinite(value) && value >= 0 && value <= 2000)) return;
+  entry.chrome = { width: Math.ceil(chrome.width), height: Math.ceil(chrome.height) };
+  if (entry.videoSize && entry.selectedScale != null) resizeWindow(entry, entry.videoSize, entry.selectedScale);
+  installMenu();
+});
 ipcMain.on('glkvm:video-size', (event, size) => {
   const entry = deviceSender(event);
   if (!entry || windows.get(entry.device.id) !== entry) return;
   if (!Number.isInteger(size?.width) || !Number.isInteger(size?.height) || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) return;
   const ratio = size.width / size.height;
   if (ratio < 0.25 || ratio > 8) return;
-  const firstSize = !entry.videoSize;
   entry.videoSize = { width: size.width, height: size.height };
   installMenu();
   const win = entry.window;
-  if (firstSize && entry.device.windowScale != null) {
+  if (entry.selectedScale != null) {
     const display = screen.getDisplayMatching(win.getBounds());
-    const target = windowSize(size, entry.device.windowScale, display.workArea, display.scaleFactor);
+    const target = windowSize(size, entry.selectedScale, display.workArea, display.scaleFactor);
     if (target.fits) {
       if (entry.options && entry.cleanBounds) {
         entry.cleanBounds = { ...entry.cleanBounds, width: target.width, height: target.height };
       }
-      resizeWindow(entry, size, entry.device.windowScale);
+      resizeWindow(entry, size, entry.selectedScale);
       return;
     }
   }
