@@ -46,3 +46,16 @@ test('invalid settings cannot overwrite the existing file or import credentials'
     assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('connection presentation defaults migrate and invalid values are rejected', () => {
+  const legacy = defaults();
+  delete legacy.devices[0].startMode;
+  delete legacy.devices[0].windowScale;
+  const migrated = validateConfig(legacy);
+  assert.equal(migrated.devices[0].startMode, 'window-decoration-less');
+  assert.equal(migrated.devices[0].windowScale, null);
+  for (const windowScale of [0, -1, 3, '1.5']) {
+    assert.throws(() => validateConfig({ ...legacy, devices: [{ ...legacy.devices[0], windowScale }] }));
+  }
+  assert.throws(() => validateConfig({ ...legacy, devices: [{ ...legacy.devices[0], startMode: 'unknown' }] }));
+});

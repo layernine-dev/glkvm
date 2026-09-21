@@ -156,6 +156,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   });
   const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, options: false, cleanBounds: null, videoSize: null };
   collection.set(device.id, entry);
+  if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
   win.webContents.setAudioMuted(consoleWindow || config.muted);
   win.on('closed', () => { collection.delete(device.id); installMenu(); });
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
@@ -192,9 +193,13 @@ function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
   const entry = showDevice(device);
+  setDeviceOptions(entry, !entry.options);
+}
+/** @param {Entry} entry @param {boolean} enabled */
+function setDeviceOptions(entry, enabled) {
   const win = entry.window;
   releaseInput(entry);
-  entry.options = !entry.options;
+  entry.options = enabled;
   win.webContents.setIgnoreMenuShortcuts(false);
   win.setAspectRatio(0);
   if (entry.options) {
@@ -362,9 +367,20 @@ ipcMain.on('glkvm:video-size', (event, size) => {
   if (!Number.isInteger(size?.width) || !Number.isInteger(size?.height) || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) return;
   const ratio = size.width / size.height;
   if (ratio < 0.25 || ratio > 8) return;
+  const firstSize = !entry.videoSize;
   entry.videoSize = { width: size.width, height: size.height };
   installMenu();
   const win = entry.window;
+  if (firstSize && entry.device.windowScale != null) {
+    const display = screen.getDisplayMatching(win.getBounds());
+    const target = windowSize(size, entry.device.windowScale, display.workArea, display.scaleFactor);
+    if (target.fits) {
+      if (entry.options && entry.cleanBounds) {
+        entry.cleanBounds = { ...entry.cleanBounds, width: target.width, height: target.height };
+      } else resizeWindow(entry, size, entry.device.windowScale);
+      return;
+    }
+  }
   if (entry.options) return;
   win.setAspectRatio(ratio);
   if (win.isFullScreen()) return;
