@@ -20,6 +20,9 @@ let deviceName = '';
 /** @type {{width: number, height: number} | null} */
 let videoPoints = null;
 let lastChrome = '';
+/** @type {Element | null} */
+let observedContent = null;
+const contentObserver = new ResizeObserver(() => { if (surface) update(); });
 /** @type {HTMLDivElement} */
 let titleBar;
 /** @type {HTMLSpanElement} */
@@ -85,6 +88,17 @@ function update() {
   if (videoPoints) {
     root.style.setProperty('--glkvm-options-width', `${videoPoints.width}px`);
     root.style.setProperty('--glkvm-options-height', `${videoPoints.height}px`);
+    const content = document.querySelector('.player-content');
+    if (content !== observedContent) {
+      contentObserver.disconnect();
+      observedContent = content;
+      if (content) contentObserver.observe(content);
+    }
+    // Preserve the selected window size while a sidebar temporarily takes video space.
+    const available = content?.clientWidth || window.innerWidth;
+    const fit = Math.min(1, available / videoPoints.width);
+    root.style.setProperty('--glkvm-video-width', `${videoPoints.width * fit}px`);
+    root.style.setProperty('--glkvm-video-height', `${videoPoints.height * fit}px`);
   }
   if (titleLabel) titleLabel.textContent = deviceName;
   const next = document.querySelector('#stream-video, #stream-canvas');
@@ -113,7 +127,7 @@ function update() {
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
     const frame = document.querySelector('#stream-window');
     if (ready && frame) {
-      const rect = frame.getBoundingClientRect();
+      const rect = (document.querySelector('.player-content') || frame).getBoundingClientRect();
       const footer = document.querySelector('.kvm-video-info')?.getBoundingClientRect().height || 0;
       const keyboard = document.querySelector('.player-outer.keyboard-opened + .keyboard-container')?.getBoundingClientRect().height || 0;
       const chrome = { width: 0, height: Math.max(32, rect.top) + footer + keyboard };
@@ -165,31 +179,31 @@ window.addEventListener('DOMContentLoaded', () => {
     #glkvm-clean-surface, #glkvm-clean-drag, #glkvm-title-bar { display: none; }
     html[data-glkvm-options] { padding-top: 32px !important; box-sizing: border-box !important; }
     /* Vendor viewport-height containers otherwise center a fixed-size video with empty bands. */
-    html[data-glkvm-options][data-glkvm-sized] .kvm-page-container,
-    html[data-glkvm-options][data-glkvm-sized] .kvm-page,
-    html[data-glkvm-options][data-glkvm-sized] .kvm-page-content,
-    html[data-glkvm-options][data-glkvm-sized] .player-outer,
-    html[data-glkvm-options][data-glkvm-sized] .player-container {
-      height: auto !important; min-height: 0 !important; flex-grow: 0 !important;
+    html:root[data-glkvm-options][data-glkvm-sized] .kvm-page-container,
+    html:root[data-glkvm-options][data-glkvm-sized] .kvm-page,
+    html:root[data-glkvm-options][data-glkvm-sized] .kvm-page-content,
+    html:root[data-glkvm-options][data-glkvm-sized] .player-outer,
+    html:root[data-glkvm-options][data-glkvm-sized] .player-container {
+      height: auto !important; min-height: 0 !important; min-width: 0 !important; flex-grow: 0 !important;
       transition: none !important;
     }
-    html[data-glkvm-options][data-glkvm-sized] .player-content,
-    html[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-nested-loading,
-    html[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-container {
+    html:root[data-glkvm-options][data-glkvm-sized] .player-content,
+    html:root[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-nested-loading,
+    html:root[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-container {
       height: var(--glkvm-options-height) !important; min-height: 0 !important;
-      flex: none !important; align-items: flex-start !important;
+      flex: none !important; align-items: center !important;
       margin-top: 0 !important; margin-bottom: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;
     }
-    html[data-glkvm-options][data-glkvm-sized] #stream-window,
-    html[data-glkvm-options][data-glkvm-sized] #stream-box {
-      width: var(--glkvm-options-width) !important; height: var(--glkvm-options-height) !important;
+    html:root[data-glkvm-options][data-glkvm-sized] #stream-window,
+    html:root[data-glkvm-options][data-glkvm-sized] body #stream-window #stream-box {
+      width: var(--glkvm-video-width) !important; height: var(--glkvm-video-height) !important;
       min-width: 0 !important; min-height: 0 !important; max-width: none !important; max-height: none !important;
       flex: none !important; margin: 0 !important; padding: 0 !important; border: 0 !important; transform: none !important;
       animation: none !important; transition: none !important;
     }
-    html[data-glkvm-options][data-glkvm-sized] #stream-video,
-    html[data-glkvm-options][data-glkvm-sized] #stream-canvas,
-    html[data-glkvm-options][data-glkvm-sized] #video-wrapper {
+    html:root[data-glkvm-options][data-glkvm-sized] body #stream-window #stream-box #stream-video,
+    html:root[data-glkvm-options][data-glkvm-sized] body #stream-window #stream-box #stream-canvas,
+    html:root[data-glkvm-options][data-glkvm-sized] body #stream-window #stream-box #video-wrapper {
       width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important;
       padding: 0 !important; border: 0 !important; object-fit: contain !important; transform: none !important;
     }
