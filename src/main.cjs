@@ -52,7 +52,17 @@ function toggleMode(entry) {
 /** @returns {Map<string, () => void>} */
 function appShortcuts() {
   const shortcuts = new Map();
-  if (!BrowserWindow.getFocusedWindow()) return shortcuts;
+  const focused = BrowserWindow.getFocusedWindow();
+  if (!focused) return shortcuts;
+  shortcuts.set('CommandOrControl+W', () => {
+    const entry = focusedEntry();
+    if (entry) releaseInput(entry);
+    focused.close();
+  });
+  shortcuts.set('CommandOrControl+Q', () => {
+    for (const entry of allEntries()) releaseInput(entry);
+    app.quit();
+  });
   config.devices.slice(0, 9).forEach((device, index) => shortcuts.set(`CommandOrControl+${index + 1}`, () => showDevice(device)));
   shortcuts.set('CommandOrControl+Shift+O', toggleDeviceSettings);
   const entry = focusedEntry();
@@ -160,6 +170,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   handleAppShortcuts(win.webContents);
   win.webContents.on('before-input-event', (_event, input) => {
+    if (win.isDestroyed()) return;
     // Editing shortcuts belong to the remote computer while its player is focused.
     // App/window commands keep their explicit, documented shortcuts.
     const remoteEdit = !consoleWindow && !entry.options && entry.streaming && entry.controlEnabled && !entry.moving && input.meta && !input.alt && ['a', 'c', 'v', 'x', 'z'].includes(input.key.toLowerCase()) && !(input.shift && input.key.toLowerCase() === 'c');

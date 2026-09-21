@@ -67,6 +67,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(new URL(clean.webContents.getURL()).hash, '');
     assert.equal(BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')), false);
     const bounds = clean.getBounds();
+    app.focus({ steal: true });
     clean.focus();
     await waitFor(() => clean.isFocused());
     // Mode shortcuts must work before/after player focus and native dragging.
@@ -141,7 +142,16 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => clean.isFocused());
     assert.ok(globalShortcut.isRegistered('CommandOrControl+1'));
     assert.ok(globalShortcut.isRegistered('CommandOrControl+2'));
-    second.close();
+    second.focus();
+    await waitFor(() => second.isFocused());
+    second.webContents.setIgnoreMenuShortcuts(true);
+    second.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers: ['meta', 'shift'] });
+    await waitFor(() => second.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-drag')"));
+    second.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'W', modifiers: ['meta'] });
+    await waitFor(() => second.isDestroyed());
+    assert.equal(clean.isDestroyed(), false);
+    clean.focus();
+    await waitFor(() => clean.isFocused());
     command('Settings…');
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'));
     const settings = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings');
@@ -174,7 +184,17 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal((await settings.webContents.executeJavaScript(`window.settings.save(${JSON.stringify(empty)})`)).ok, true);
     await waitFor(() => clean.isDestroyed());
     assert.equal(settings.isDestroyed(), false);
-    console.log('PASS: app startup, separate login and automatic clean reconnect, isolated settings bridge, integrated options without reload or window replacement, restored bounds, local connection shortcuts, saved settings, live mode/name changes, rejected invalid save, connection removal');
+    settings.focus();
+    await waitFor(() => settings.isFocused());
+    assert.ok(globalShortcut.isRegistered('CommandOrControl+W'));
+    assert.ok(globalShortcut.isRegistered('CommandOrControl+Q'));
+    const quitting = new Promise(resolve => app.once('will-quit', event => { event.preventDefault(); resolve(undefined); }));
+    settings.webContents.setIgnoreMenuShortcuts(true);
+    settings.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Q', modifiers: ['meta'] });
+    await quitting;
+    assert.equal(BrowserWindow.getAllWindows().length, 0);
+    assert.equal(globalShortcut.isRegistered('CommandOrControl+Q'), false);
+    console.log('PASS: local close and quit shortcuts, app startup, separate login and automatic clean reconnect, isolated settings bridge, integrated options without reload or window replacement, restored bounds, local connection shortcuts, saved settings, live mode/name changes, rejected invalid save, connection removal');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
   finally { server.close(); fs.rmSync(directory, { recursive: true, force: true }); }
