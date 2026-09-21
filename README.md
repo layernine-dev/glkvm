@@ -84,7 +84,9 @@ Sizes outside the display's available area, above 6K, or below the minimum
 160×90 logical points are disabled instead of silently reduced. Moving between
 displays updates the choices. These controls do not change the remote resolution.
 
-Shortcuts apply while the app is active. The mode toggle is registered
+Shortcuts apply while the app is active. ⌘W closes only the focused window;
+⌘Q quits the app and closes every window, including from move mode or device
+settings. Neither shortcut is forwarded to the remote desktop. The mode toggle is registered
 with macOS only while a clean window has focus, so dragging or clicking the
 remote desktop does not depend on the embedded player's keyboard focus. Documented app/window shortcuts remain
 local. Editing shortcuts such as ⌘C and ⌘V pass through to the remote keyboard
