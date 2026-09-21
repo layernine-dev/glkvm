@@ -149,7 +149,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   const width = Math.round(Math.min(1280, work.width - 100, consoleWindow ? 1280 : (work.height - 100) * 16 / 9));
   const height = consoleWindow ? Math.min(850, work.height - 100) : Math.round(width * 9 / 16);
   const win = new BrowserWindow({
-    title: consoleWindow ? `${device.name} — Device Settings` : `GLKVM ${device.name}`,
+    title: consoleWindow ? `${device.name} — Device Settings` : device.name,
     width, height, x: work.x + 40 + (windows.size % 5) * 40, y: work.y + 40 + (windows.size % 5) * 40,
     minWidth: consoleWindow ? 720 : 160, minHeight: consoleWindow ? 500 : 90,
     frame: consoleWindow, roundedCorners: consoleWindow, hasShadow: consoleWindow,
@@ -322,7 +322,7 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
         const passwordChanged = entry.device.encryptedPassword !== updated.encryptedPassword;
         entry.device = updated;
         const clean = windows.get(updated.id) === entry;
-        entry.window.setTitle(clean ? `GLKVM ${updated.name}` : `${updated.name} — Device Settings`);
+        entry.window.setTitle(clean ? updated.name : `${updated.name} — Device Settings`);
         if (clean && previous.controlEnabled !== next.controlEnabled) { releaseInput(entry); entry.controlEnabled = next.controlEnabled; entry.moving = false; sendMode(entry); }
         sendMode(entry);
         entry.window.webContents.setAudioMuted(!clean || next.muted);

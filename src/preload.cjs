@@ -86,7 +86,7 @@ function update() {
     root.style.setProperty('--glkvm-options-width', `${videoPoints.width}px`);
     root.style.setProperty('--glkvm-options-height', `${videoPoints.height}px`);
   }
-  if (titleLabel) titleLabel.textContent = `${deviceName} — Device Settings`;
+  if (titleLabel) titleLabel.textContent = deviceName;
   const next = document.querySelector('#stream-video, #stream-canvas');
   const nextSource = next instanceof HTMLVideoElement || next instanceof HTMLCanvasElement ? next : null;
   const nextPlayer = nextSource?.closest('#stream-box');
@@ -114,15 +114,9 @@ function update() {
     const frame = document.querySelector('#stream-window');
     if (ready && frame) {
       const rect = frame.getBoundingClientRect();
-      let footer = 0;
-      // Measure visible footer/status content, not unused viewport space.
-      for (const element of document.body.querySelectorAll('*')) {
-        if (frame.contains(element) || element.contains(frame) || element.children.length) continue;
-        const box = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        if (box.width && box.height && style.visibility !== 'hidden' && box.top >= rect.bottom - 1) footer = Math.max(footer, box.height);
-      }
-      const chrome = { width: 0, height: Math.max(32, rect.top) + footer };
+      const footer = document.querySelector('.kvm-video-info')?.getBoundingClientRect().height || 0;
+      const keyboard = document.querySelector('.player-outer.keyboard-opened + .keyboard-container')?.getBoundingClientRect().height || 0;
+      const chrome = { width: 0, height: Math.max(32, rect.top) + footer + keyboard };
       const key = JSON.stringify(chrome);
       if (key !== lastChrome) { lastChrome = key; ipcRenderer.send('glkvm:options-chrome', chrome); }
     }
@@ -170,11 +164,28 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     #glkvm-clean-surface, #glkvm-clean-drag, #glkvm-title-bar { display: none; }
     html[data-glkvm-options] { padding-top: 32px !important; box-sizing: border-box !important; }
+    /* Vendor viewport-height containers otherwise center a fixed-size video with empty bands. */
+    html[data-glkvm-options][data-glkvm-sized] .kvm-page-container,
+    html[data-glkvm-options][data-glkvm-sized] .kvm-page,
+    html[data-glkvm-options][data-glkvm-sized] .kvm-page-content,
+    html[data-glkvm-options][data-glkvm-sized] .player-outer,
+    html[data-glkvm-options][data-glkvm-sized] .player-container {
+      height: auto !important; min-height: 0 !important; flex-grow: 0 !important;
+      transition: none !important;
+    }
+    html[data-glkvm-options][data-glkvm-sized] .player-content,
+    html[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-nested-loading,
+    html[data-glkvm-options][data-glkvm-sized] .player-content .ant-spin-container {
+      height: var(--glkvm-options-height) !important; min-height: 0 !important;
+      flex: none !important; align-items: flex-start !important;
+      margin-top: 0 !important; margin-bottom: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;
+    }
     html[data-glkvm-options][data-glkvm-sized] #stream-window,
     html[data-glkvm-options][data-glkvm-sized] #stream-box {
       width: var(--glkvm-options-width) !important; height: var(--glkvm-options-height) !important;
       min-width: 0 !important; min-height: 0 !important; max-width: none !important; max-height: none !important;
-      flex: none !important; padding: 0 !important; border: 0 !important; transform: none !important;
+      flex: none !important; margin: 0 !important; padding: 0 !important; border: 0 !important; transform: none !important;
+      animation: none !important; transition: none !important;
     }
     html[data-glkvm-options][data-glkvm-sized] #stream-video,
     html[data-glkvm-options][data-glkvm-sized] #stream-canvas,
