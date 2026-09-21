@@ -214,12 +214,16 @@ server.listen(0, '127.0.0.1', async () => {
       const style = document.createElement('style');
       style.textContent = 'html,body{height:100%}.kvm-page-container,.kvm-page-content,.player-outer,.player-container{height:100%}.player-content{height:100%;display:flex;align-items:center}.ant-spin-nested-loading,.ant-spin-container{height:100%;width:100%;display:flex;align-items:center;justify-content:center}.kvm-video-info{height:32px}';
       document.head.append(style);
+      style.textContent += '#stream-window.is-fixed-scale.stream-window-inited[data-v-fixture]{width:auto!important;height:auto!important}#stream-window.is-fixed-scale #stream-box[data-v-fixture]{max-width:100%;max-height:100%}#stream-window.is-fixed-scale #stream-video[data-v-fixture]{width:unset!important;height:unset!important;position:static!important;max-width:100%;max-height:100%}';
       const frame = document.querySelector('#stream-window');
+      frame.className = 'is-fixed-scale stream-window-inited'; frame.setAttribute('data-v-fixture', '');
+      document.querySelector('#stream-box').setAttribute('data-v-fixture', '');
       const host = document.createElement('div'); host.className = 'kvm-page-container';
       host.innerHTML = '<div class="kvm-page-content"><div class="player-outer"><div class="player-container"><div class="player-content"><div class="ant-spin-nested-loading"><div class="ant-spin-container"></div></div></div></div></div></div>';
       frame.before(host); host.querySelector('.ant-spin-container').append(frame);
       const footer = document.createElement('div'); footer.className = 'kvm-video-info'; footer.textContent = 'Status'; host.append(footer);
       window.connect(1280, 720);
+      document.querySelector('#stream-video').setAttribute('data-v-fixture', '');
     })()`);
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video').videoWidth === 1280"));
     for (const scale of [1, 1.5, 2]) {
@@ -242,6 +246,32 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(layout.videoTop, layout.toolbarBottom, 'No empty band above the video');
     assert.equal(layout.footerTop, layout.videoBottom, 'Status follows the video without an empty band');
     assert.ok(Math.abs(layout.footerBottom - layout.viewport) < 1, 'Window ends after status content, rounded to a whole window point');
+    const beforeSidebar = reopened.getBounds();
+    await reopened.webContents.executeJavaScript(`(() => {
+      const content = document.querySelector('.kvm-page-content');
+      const row = document.createElement('div'); row.style.display = 'flex';
+      const sidebar = document.createElement('aside'); sidebar.id = 'test-sidebar';
+      sidebar.style.cssText = 'width:260px;flex:none'; sidebar.textContent = 'Session Settings';
+      content.before(row); row.append(sidebar, content);
+      content.style.cssText = 'width:100%;flex-shrink:1';
+    })()`);
+    await waitFor(async () => {
+      const metrics = await reopened.webContents.executeJavaScript(`(() => {
+        const video = document.querySelector('video').getBoundingClientRect();
+        const content = document.querySelector('.player-content').getBoundingClientRect();
+        return { width: video.width, height: video.height, available: content.width, right: video.right, viewport: innerWidth };
+      })()`);
+      return Math.abs(metrics.width - (1280 * 2 / optionsDensity - 260)) < 1
+        && Math.abs(metrics.width / metrics.height - 1280 / 720) < 0.001
+        && metrics.right <= metrics.viewport + 1;
+    });
+    assert.deepEqual(reopened.getBounds(), beforeSidebar, 'Opening a sidebar does not resize the window');
+    await reopened.webContents.executeJavaScript("document.querySelector('#test-sidebar').remove()");
+    await waitFor(async () => {
+      const width = await reopened.webContents.executeJavaScript("document.querySelector('video').getBoundingClientRect().width");
+      return width === 1280 * 2 / optionsDensity;
+    });
+    assert.deepEqual(reopened.getBounds(), beforeSidebar, 'Closing a sidebar restores video size in the same window');
     command('Device Settings…');
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
     const reopenedDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
