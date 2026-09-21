@@ -39,8 +39,8 @@ server.listen(0, '127.0.0.1', async () => {
   require('../src/main.cjs');
   try {
     await app.whenReady();
-    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Fixture'));
-    const clean = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Fixture');
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Fixture'));
+    const clean = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture');
     assert.ok(clean);
     await waitFor(() => !clean.webContents.isLoading());
     assert.equal(await clean.webContents.executeJavaScript('getComputedStyle(document.body).visibility'), 'hidden');
@@ -49,7 +49,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(login);
     await waitFor(() => !login.webContents.isLoading());
     assert.equal(login.isVisible(), false);
-    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['GLKVM Fixture']);
+    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
 
     await waitFor(() => login.webContents.executeJavaScript("document.querySelector('#password')?.value === 'incorrect-fixture-secret'"));
     command('Settings…');
@@ -126,15 +126,18 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     await clean.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar button[aria-label=\"Minimize window\"]').click()");
     await waitFor(() => clean.isMinimized());
-    clean.restore(); clean.focus();
+    clean.restore();
+    await waitFor(() => !clean.isMinimized());
+    app.focus({ steal: true });
+    clean.focus();
     await waitFor(() => clean.isFocused());
     command('Device Settings…');
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
     // App shortcuts also work after remote editing has disabled menu accelerators.
     clean.webContents.setIgnoreMenuShortcuts(true);
     clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '2', modifiers: ['meta'] });
-    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Second'));
-    const second = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Second');
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Second'));
+    const second = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Second');
     assert.ok(second);
     await waitFor(() => second.isFocused() && !second.webContents.isLoading());
     assert.ok(Menu.getApplicationMenu()?.items.some(item => item.label === 'Device — Second'));
@@ -168,7 +171,7 @@ server.listen(0, '127.0.0.1', async () => {
     const saved = await settings.webContents.executeJavaScript(`window.settings.save(${JSON.stringify(edited)})`);
     assert.equal(saved.ok, true);
     await waitFor(() => clean.webContents.executeJavaScript("!document.documentElement.hasAttribute('data-glkvm-control')"));
-    assert.equal(clean.getTitle(), 'GLKVM Renamed');
+    assert.equal(clean.getTitle(), 'Renamed');
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).devices[0].name, 'Renamed');
     clean.focus();
     await waitFor(() => clean.isFocused());
@@ -187,12 +190,13 @@ server.listen(0, '127.0.0.1', async () => {
     clean.close();
     await waitFor(() => clean.isDestroyed());
     await settings.webContents.executeJavaScript("window.settings.open('fixture')");
-    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Renamed'));
-    const reopened = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Renamed');
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Renamed'));
+    const reopened = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Renamed');
     assert.ok(reopened);
     await waitFor(() => !reopened.webContents.isLoading());
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     assert.equal(reopened.hasShadow(), true);
+    assert.equal(await reopened.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar span').textContent"), 'Renamed');
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640"));
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-sized')"));
     const optionsDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
@@ -205,11 +209,23 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size')?.enabled);
     const optionsSizes = Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size');
     assert.ok(optionsSizes?.enabled);
-    await reopened.webContents.executeJavaScript("window.connect(1280, 720)");
+    // Reproduce the vendor's nested full-height, vertically centered player layout.
+    await reopened.webContents.executeJavaScript(`(() => {
+      const style = document.createElement('style');
+      style.textContent = 'html,body{height:100%}.kvm-page-container,.kvm-page-content,.player-outer,.player-container{height:100%}.player-content{height:100%;display:flex;align-items:center}.ant-spin-nested-loading,.ant-spin-container{height:100%;width:100%;display:flex;align-items:center;justify-content:center}.kvm-video-info{height:32px}';
+      document.head.append(style);
+      const frame = document.querySelector('#stream-window');
+      const host = document.createElement('div'); host.className = 'kvm-page-container';
+      host.innerHTML = '<div class="kvm-page-content"><div class="player-outer"><div class="player-container"><div class="player-content"><div class="ant-spin-nested-loading"><div class="ant-spin-container"></div></div></div></div></div></div>';
+      frame.before(host); host.querySelector('.ant-spin-container').append(frame);
+      const footer = document.createElement('div'); footer.className = 'kvm-video-info'; footer.textContent = 'Status'; host.append(footer);
+      window.connect(1280, 720);
+    })()`);
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video').videoWidth === 1280"));
     for (const scale of [1, 1.5, 2]) {
+      await waitFor(() => Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size')?.submenu?.items.find(item => item.label.startsWith(`${scale}×`))?.enabled);
       const item = Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size')?.submenu?.items.find(item => item.label.startsWith(`${scale}×`));
-      assert.ok(item?.enabled);
+      assert.ok(item?.enabled, `Scale ${scale}: ${item?.label}`);
       item.click(undefined, reopened, undefined);
       await waitFor(async () => {
         const rect = await reopened.webContents.executeJavaScript("(() => { const r = document.querySelector('video').getBoundingClientRect(); return { width: r.width, height: r.height, top: r.top }; })()");
@@ -217,6 +233,15 @@ server.listen(0, '127.0.0.1', async () => {
           && reopened.getContentSize()[1] >= rect.top + rect.height;
       });
     }
+    const layout = await reopened.webContents.executeJavaScript(`(() => {
+      const video = document.querySelector('video').getBoundingClientRect();
+      const toolbar = document.querySelector('#toolbar').getBoundingClientRect();
+      const footer = document.querySelector('.kvm-video-info').getBoundingClientRect();
+      return { videoTop: video.top, videoBottom: video.bottom, toolbarBottom: toolbar.bottom, footerTop: footer.top, footerBottom: footer.bottom, viewport: innerHeight };
+    })()`);
+    assert.equal(layout.videoTop, layout.toolbarBottom, 'No empty band above the video');
+    assert.equal(layout.footerTop, layout.videoBottom, 'Status follows the video without an empty band');
+    assert.ok(Math.abs(layout.footerBottom - layout.viewport) < 1, 'Window ends after status content, rounded to a whole window point');
     command('Device Settings…');
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
     const reopenedDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
