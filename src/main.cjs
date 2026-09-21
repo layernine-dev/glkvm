@@ -103,8 +103,8 @@ function resizeWindow(entry, size, scale) {
   const fitted = windowSize(size, scale, display.workArea, display.scaleFactor);
   if (!fitted.fits) return;
   win.setAspectRatio(0);
-  win.setContentSize(fitted.width, fitted.height);
-  win.setAspectRatio(fitted.width / fitted.height);
+  win.setContentSize(Math.max(entry.options ? 720 : 160, fitted.width), Math.max(entry.options ? 500 : 90, fitted.height));
+  if (!entry.options) win.setAspectRatio(fitted.width / fitted.height);
   const bounds = win.getBounds();
   const work = display.workArea;
   win.setPosition(Math.round(Math.max(work.x, Math.min(bounds.x, work.x + work.width - bounds.width))),
@@ -377,7 +377,8 @@ ipcMain.on('glkvm:video-size', (event, size) => {
     if (target.fits) {
       if (entry.options && entry.cleanBounds) {
         entry.cleanBounds = { ...entry.cleanBounds, width: target.width, height: target.height };
-      } else resizeWindow(entry, size, entry.device.windowScale);
+      }
+      resizeWindow(entry, size, entry.device.windowScale);
       return;
     }
   }
