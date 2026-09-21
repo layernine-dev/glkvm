@@ -194,18 +194,33 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     assert.equal(reopened.hasShadow(), true);
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640"));
+    await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-sized')"));
     const optionsDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
-    await waitFor(() => {
-      const [width, height] = reopened.getContentSize();
-      return width === Math.max(720, Math.round(640 * 2 / optionsDensity))
-        && height === Math.max(500, Math.round(360 * 2 / optionsDensity));
+    await waitFor(async () => {
+      const rect = await reopened.webContents.executeJavaScript("(() => { const r = document.querySelector('video').getBoundingClientRect(); return { width: r.width, height: r.height }; })()");
+      return rect.width === 640 * 2 / optionsDensity && rect.height === 360 * 2 / optionsDensity;
     });
     reopened.focus();
     await waitFor(() => reopened.isFocused());
+    await waitFor(() => Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size')?.enabled);
+    const optionsSizes = Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size');
+    assert.ok(optionsSizes?.enabled);
+    await reopened.webContents.executeJavaScript("window.connect(1280, 720)");
+    await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video').videoWidth === 1280"));
+    for (const scale of [1, 1.5, 2]) {
+      const item = Menu.getApplicationMenu()?.items.find(item => item.label === 'Window')?.submenu?.items.find(item => item.label === 'Window Size')?.submenu?.items.find(item => item.label.startsWith(`${scale}×`));
+      assert.ok(item?.enabled);
+      item.click(undefined, reopened, undefined);
+      await waitFor(async () => {
+        const rect = await reopened.webContents.executeJavaScript("(() => { const r = document.querySelector('video').getBoundingClientRect(); return { width: r.width, height: r.height, top: r.top }; })()");
+        return rect.width === 1280 * scale / optionsDensity && rect.height === 720 * scale / optionsDensity
+          && reopened.getContentSize()[1] >= rect.top + rect.height;
+      });
+    }
     command('Device Settings…');
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
     const reopenedDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
-    assert.deepEqual(reopened.getContentSize(), [Math.round(640 * 2 / reopenedDensity), Math.round(360 * 2 / reopenedDensity)]);
+    assert.deepEqual(reopened.getContentSize(), [Math.round(1280 * 2 / reopenedDensity), Math.round(720 * 2 / reopenedDensity)]);
     const persisted = JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8'));
     assert.equal(persisted.devices[0].startMode, 'options-enabled');
     assert.equal(persisted.devices[0].windowScale, 2);
