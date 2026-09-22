@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -8,9 +8,10 @@ const { publicConfig, prepareConfig, readPassword } = require('./credentials.cjs
 const { fingerprint, isPinned } = require('./certificates.cjs');
 const { scales, windowSize } = require('./window-sizes.cjs');
 
+const { keyboardAction } = require('./keyboard.cjs');
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -35,7 +36,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name });
+  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name });
 }
 /** @param {Entry} entry */
 function releaseInput(entry) { entry.window.webContents.send('glkvm:release-input'); }
@@ -160,7 +161,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null };
   collection.set(device.id, entry);
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
   win.webContents.setAudioMuted(consoleWindow || config.muted);
@@ -177,11 +178,13 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   handleAppShortcuts(win.webContents);
   win.webContents.on('before-input-event', (_event, input) => {
+    const action = keyboardAction(config.keyboard, input);
+    const localAction = !!action && !consoleWindow && entry.streaming && entry.playerFocused && entry.controlEnabled && !entry.moving;
     if (win.isDestroyed()) return;
     // Editing shortcuts belong to the remote computer while its player is focused.
     // App/window commands keep their explicit, documented shortcuts.
     const remoteEdit = !consoleWindow && !entry.options && entry.streaming && entry.controlEnabled && !entry.moving && input.meta && !input.alt && ['a', 'c', 'v', 'x', 'z'].includes(input.key.toLowerCase()) && !(input.shift && input.key.toLowerCase() === 'c');
-    win.webContents.setIgnoreMenuShortcuts(remoteEdit);
+    win.webContents.setIgnoreMenuShortcuts(localAction || remoteEdit);
   });
   win.once('ready-to-show', () => { if (!entry.background) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
@@ -380,6 +383,30 @@ ipcMain.on('glkvm:console-connected', event => {
   const clean = windows.get(consoleEntry.device.id);
   if (clean?.needsLogin) { clean.needsLogin = false; void clean.window.loadURL(`${clean.device.origin}/`).catch(() => {}); }
   if (consoleEntry.background) consoleEntry.window.close();
+});
+ipcMain.on('glkvm:keyboard-shortcut', (event, /** @type {unknown} */ action) => {
+  const entry = deviceSender(event);
+  if (!entry || windows.get(entry.device.id) !== entry || !entry.window.isFocused() || !entry.streaming || !entry.playerFocused || !entry.controlEnabled || entry.moving) return;
+  if (action !== 'insert' && action !== 'secureAttention' && action !== 'paste') return;
+  if (!config.keyboard?.[action]) return;
+  const win = entry.window;
+  if (action !== 'paste') { win.webContents.send('glkvm:keyboard-action', { action }); return; }
+  const url = win.webContents.getURL();
+  void clipboard.readText().then(text => {
+    if (!win.isDestroyed() && win.isFocused() && win.webContents.getURL() === url && entry.streaming && entry.playerFocused && entry.controlEnabled && !entry.moving) {
+      win.webContents.send('glkvm:keyboard-action', { action, text, keymap: config.keyboard?.keymap || 'de' });
+    }
+  }).catch(() => { if (!win.isDestroyed()) void dialog.showMessageBox(win, { type: 'error', message: 'Could not read clipboard text.' }); });
+});
+ipcMain.on('glkvm:player-focus', (event, focused) => {
+  const entry = deviceSender(event);
+  if (entry && windows.get(entry.device.id) === entry) entry.playerFocused = focused === true;
+});
+ipcMain.on('glkvm:keyboard-error', (event, message) => {
+  const entry = deviceSender(event);
+  if (entry && windows.get(entry.device.id) === entry && typeof message === 'string') {
+    void dialog.showMessageBox(entry.window, { type: 'error', message: 'Keyboard action failed', detail: message.slice(0, 300) });
+  }
 });
 ipcMain.on('glkvm:stream-state', (event, streaming) => { const entry = deviceSender(event); if (entry) entry.streaming = streaming === true; });
 ipcMain.on('glkvm:options-chrome', (event, chrome) => {

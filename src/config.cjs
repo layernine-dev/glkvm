@@ -1,13 +1,14 @@
+const { defaultKeyboard, validateKeyboard } = require('./keyboard.cjs');
 const fs = require('node:fs');
 const { randomUUID, createHash } = require('node:crypto');
 const { scales } = require('./window-sizes.cjs');
 const { devices } = require('./devices.cjs');
 
 /** @typedef {{id: string, name: string, origin: string, openAtStartup: boolean, startMode?: string, windowScale?: number | null, encryptedPassword?: string}} Device */
-/** @typedef {{version: number, devices: Device[], controlEnabled: boolean, muted: boolean}} Config */
+/** @typedef {{version: number, devices: Device[], controlEnabled: boolean, muted: boolean, keyboard?: ReturnType<typeof defaultKeyboard>}} Config */
 /** @returns {Config} */
 function defaults() {
-  return { version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true, startMode: 'window-decoration-less', windowScale: null })), controlEnabled: true, muted: true };
+  return { keyboard: defaultKeyboard(), version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true, startMode: 'window-decoration-less', windowScale: null })), controlEnabled: true, muted: true };
 }
 
 /** @param {unknown} value @returns {Config} */
@@ -37,7 +38,7 @@ function validateConfig(value) {
     if (device.encryptedPassword !== undefined && (typeof device.encryptedPassword !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(device.encryptedPassword) || device.encryptedPassword.length > 32768)) throw new Error('Invalid encrypted password.');
     return { ...(device.encryptedPassword ? { encryptedPassword: device.encryptedPassword } : {}), id, name: device.name.trim(), origin: url.origin, startMode, windowScale, openAtStartup: device.openAtStartup };
   });
-  return { version: 1, devices: normalized, controlEnabled: input.controlEnabled, muted: input.muted };
+  return { keyboard: validateKeyboard(input.keyboard), version: 1, devices: normalized, controlEnabled: input.controlEnabled, muted: input.muted };
 }
 
 /** @param {string} file */

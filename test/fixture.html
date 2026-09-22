@@ -12,6 +12,7 @@ body { margin: 0; background: #ed11aa; }
   <div id="login" class="auth-form-container"><form class="login-form" onsubmit="return false"><label>Password <input id="password" type="password"></label></form><button class="operation-btn" onclick="if(document.querySelector('#password').value === 'fixture-secret') {localStorage.setItem('fixture-auth', 'true'); window.connect()}">Login</button></div>
   <div id="stream-window"><div id="stream-box" tabindex="-1"><div id="video-wrapper"></div><video id="stream-video"></video></div></div>
   <script>
+    window.keyLog = [];
     window.inputEvents = 0;
     window.mouseEvents = 0;
     window.keyReleases = 0;
@@ -21,7 +22,8 @@ body { margin: 0; background: #ed11aa; }
     document.addEventListener('keydown', () => window.inputEvents++);
     document.addEventListener('mousedown', () => window.mouseEvents++);
     const box = document.querySelector('#stream-box');
-    box.addEventListener('keydown', e => { e.preventDefault(); });
+    box.addEventListener('keydown', e => { e.preventDefault(); window.keyLog.push([e.type, e.code]); });
+    box.addEventListener('keyup', e => window.keyLog.push([e.type, e.code]));
     box.addEventListener('keyup', () => window.keyReleases++);
     box.addEventListener('mouseup', () => window.mouseReleases++);
     box.addEventListener('wheel', e => { e.preventDefault(); window.scrollEvents++; });

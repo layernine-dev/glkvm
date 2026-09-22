@@ -9,6 +9,7 @@ function message(text, error = false) {
 }
 function changed() { dirty = true; message('Unsaved changes'); }
 function render() {
+  renderKeyboard();
   list.replaceChildren();
   if (!config.devices.length) {
     const empty = document.createElement('p');
@@ -53,9 +54,9 @@ function render() {
   });
   document.querySelector('#add-device').disabled = config.devices.length >= 32;
 }
-for (const section of ['connections', 'controls']) {
+for (const section of ['connections', 'controls', 'keyboard']) {
   document.querySelector(`#${section}-tab`).addEventListener('click', () => {
-    for (const id of ['connections', 'controls']) {
+    for (const id of ['connections', 'controls', 'keyboard']) {
       document.querySelector(`#${id}`).hidden = id !== section;
       document.querySelector(`#${id}-tab`).classList.toggle('selected', id === section);
       document.querySelector(`#${id}-tab`).setAttribute('aria-pressed', String(id === section));
@@ -87,3 +88,33 @@ settings.load().then(value => {
   document.querySelector('#muted').checked = config.muted;
   render();
 }).catch(error => { message(error.message, true); document.querySelector('#save').disabled = true; });
+
+function renderKeyboard() {
+  const container = document.querySelector('#keyboard-bindings');
+  container.replaceChildren();
+  for (const [action, title] of [['insert', 'Insert'], ['secureAttention', 'Ctrl + Alt + Delete'], ['paste', 'Paste clipboard as text']]) {
+    const row = document.createElement('div'); row.className = 'setting-row';
+    const label = document.createElement('strong'); label.textContent = title;
+    const record = document.createElement('button'); record.type = 'button';
+    record.textContent = config.keyboard[action]?.label || 'Disabled';
+    record.setAttribute('aria-label', `${title} shortcut: ${record.textContent}`);
+    let recording = false;
+    record.addEventListener('click', () => { recording = true; record.textContent = 'Press shortcut…'; });
+    record.addEventListener('blur', () => { recording = false; record.textContent = config.keyboard[action]?.label || 'Disabled'; });
+    record.addEventListener('keydown', event => {
+      if (!recording) return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === 'Escape') { record.blur(); return; }
+      if ((!event.metaKey && !event.ctrlKey && !event.altKey) || /^(Meta|Control|Alt|Shift)$/.test(event.key)) return;
+      const key = event.key === 'Dead' ? event.code : event.key.toUpperCase();
+      config.keyboard[action] = { code: event.code, meta: event.metaKey, control: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, label: `${event.ctrlKey ? '⌃' : ''}${event.altKey ? '⌥' : ''}${event.shiftKey ? '⇧' : ''}${event.metaKey ? '⌘' : ''}${key}` };
+      changed(); record.blur();
+    });
+    const disable = document.createElement('button'); disable.type = 'button'; disable.textContent = 'Disable';
+    disable.setAttribute('aria-label', `Disable ${title}`);
+    disable.addEventListener('click', () => { config.keyboard[action] = null; changed(); renderKeyboard(); });
+    row.append(label, record, disable); container.append(row);
+  }
+  document.querySelector('#paste-keymap').value = config.keyboard.keymap;
+}
+document.querySelector('#paste-keymap').addEventListener('change', event => { config.keyboard.keymap = event.target.value; changed(); });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen, clipboard } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,7 +8,15 @@ const { prepareConfig } = require('../src/credentials.cjs');
 const { defaults } = require('../src/config.cjs');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-app-'));
 app.setPath('userData', directory);
+/** @type {{url: string, body: string}[]} */
+const pastes = [];
 const server = createServer((_req, res) => {
+  if (_req.url?.startsWith('/api/hid/print')) {
+    let body = '';
+    _req.on('data', chunk => { body += chunk; });
+    _req.on('end', () => { pastes.push({ url: _req.url || '', body }); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); });
+    return;
+  }
   res.setHeader('content-type', 'text/html');
   res.end(fs.readFileSync(path.join(__dirname, 'fixture.html')));
 });
@@ -57,6 +65,24 @@ server.listen(0, '127.0.0.1', async () => {
     const passwordSettings = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings');
     assert.ok(passwordSettings);
     await waitFor(() => !passwordSettings.webContents.isLoading());
+    await waitFor(() => passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-bindings button') !== null"));
+    await passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-tab').click()");
+    assert.equal(await passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard').hidden"), false);
+    await passwordSettings.webContents.executeJavaScript(`
+      const record = document.querySelector('#keyboard-bindings button');
+      record.click(); record.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', code: 'KeyI', altKey: true, bubbles: true }));
+      document.querySelector('#settings-form').requestSubmit();
+    `);
+    await waitFor(() => passwordSettings.webContents.executeJavaScript("document.querySelector('#save-status').textContent === 'Changes saved'"));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).keyboard.insert.code, 'KeyI');
+    await passwordSettings.webContents.executeJavaScript(`(async () => {
+      const value = await settings.load(); value.keyboard.insert = ${JSON.stringify(defaults().keyboard?.insert)};
+      config = (await settings.save(value)).config;
+      render();
+    })()`);
+    await waitFor(() => passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-bindings button')?.textContent === '⌘´'"));
+    await passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-tab').click()");
+    fs.writeFileSync('/tmp/glkvm-keyboard-settings.png', (await passwordSettings.webContents.capturePage()).toPNG());
     assert.equal(await passwordSettings.webContents.executeJavaScript(`(async () => {
       const value = await window.settings.load();
       value.devices[0].password = 'fixture-secret';
@@ -70,6 +96,31 @@ server.listen(0, '127.0.0.1', async () => {
     app.focus({ steal: true });
     clean.focus();
     await waitFor(() => clean.isFocused());
+    await clean.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['meta'] });
+    clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: '=', modifiers: ['meta'] });
+    await waitFor(() => clean.webContents.executeJavaScript("window.keyLog.some(e => e[1] === 'Insert')"));
+    assert.deepEqual(await clean.webContents.executeJavaScript("window.keyLog.filter(e => ['Insert', 'Equal'].includes(e[1]))"), [['keydown', 'Insert'], ['keyup', 'Insert']]);
+    await clean.webContents.executeJavaScript('window.keyLog = []');
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace', modifiers: ['meta', 'alt'] });
+    clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace', modifiers: ['meta', 'alt'] });
+    await waitFor(() => clean.webContents.executeJavaScript("window.keyLog.filter(e => ['ControlLeft', 'AltLeft', 'Delete', 'Backspace'].includes(e[1])).length === 6"));
+    assert.deepEqual(await clean.webContents.executeJavaScript("window.keyLog.filter(e => ['ControlLeft', 'AltLeft', 'Delete', 'Backspace'].includes(e[1]))"), [['keydown', 'ControlLeft'], ['keydown', 'AltLeft'], ['keydown', 'Delete'], ['keyup', 'Delete'], ['keyup', 'AltLeft'], ['keyup', 'ControlLeft']]);
+    // Exercise native shortcut dispatch without modifying the system clipboard.
+    const readClipboard = clipboard.readText;
+    try {
+      clipboard.readText = async () => 'Grüße aus Notes\nSecond line';
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['meta'] });
+      clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['meta'] });
+      await waitFor(() => pastes.length === 1);
+      clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['meta', 'isautorepeat'] });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(pastes.length, 1, 'Auto-repeat never resends clipboard text');
+      assert.deepEqual(pastes[0], { url: '/api/hid/print?limit=0&keymap=de', body: 'Grüße aus Notes\nSecond line' });
+    } finally {
+      clipboard.readText = readClipboard;
+    }
     // Mode shortcuts must work before/after player focus and native dragging.
     for (let cycle = 0; cycle < 2; cycle++) {
       /** @type {Electron.KeyboardInputEvent['modifiers']} */

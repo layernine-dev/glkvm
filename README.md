@@ -180,3 +180,18 @@ References: [Electron window interactions](https://www.electronjs.org/docs/lates
 [GLKVM console guide](https://docs.gl-inet.com/kvm/en/user_guide/gl-rm1/console_guide/).
 
 Each connection has a **Start mode** (Window-decoration-less or Options-enabled) and **Window resolution** (Automatic, 0.25×, 0.5×, 0.75×, 1×, 1.5×, 2×). These preferences apply when reopening the connection. Scaling uses source video pixels and display density; sizes that exceed the display work area or 6K limit use automatic sizing. Window → Window Size is available in both views. In options mode, the selected scale fixes the video surface itself; the title bar, toolbar, and status content are added to the window size. The 720×500 minimum may leave extra space around small video sizes. Sizes that cannot fit with the controls are disabled. Returning to the clean view with ⌘⇧O removes that extra space. Existing connections default to the clean view and automatic sizing.
+
+### Remote keyboard actions
+
+Settings → Keyboard configures shortcuts for all connections. Defaults on a German
+Mac keyboard are ⌘´ (the physical key next to Backspace) for Insert, ⌘⌥⌫ for
+Ctrl+Alt+Delete, and ⌘V for sending clipboard text. Click a shortcut to record a new
+combination, or disable it; save to apply immediately. App shortcuts are reserved.
+
+Actions apply only while controlling the focused video, including with device
+options visible. Local text fields retain normal editing. Paste uses the same
+`/api/hid/print` service as the vendor Toolbox without opening its panel. Select
+the remote computer's keyboard layout (German by default). Plain text and line
+breaks are sent; images and formatting are not. Text expanders that trigger Cmd+V
+can use this path. A failed transfer is never automatically retried because some
+text may already have reached the remote computer.
