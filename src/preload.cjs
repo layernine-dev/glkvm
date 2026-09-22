@@ -32,8 +32,108 @@ let lastStreaming = false;
 let loginReported = false;
 const pressedKeys = new Map();
 const pressedButtons = new Set();
+/** @type {import('./keyboard.cjs').KeyboardSettings | undefined} */
+let keyboard;
+const pendingModifiers = new Map();
+const consumedKeys = new Set();
+const heldModifiers = new Map();
+const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste']);
+/** @type {Record<string, 'meta' | 'control' | 'alt' | 'shift'>} */
+const modifierNames = { MetaLeft: 'meta', MetaRight: 'meta', ControlLeft: 'control', ControlRight: 'control', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
+function flushModifiers() {
+  if (!player) return;
+  for (const [code, key] of heldModifiers) {
+    if (consumedKeys.has(code)) { pendingModifiers.set(code, key); consumedKeys.delete(code); }
+  }
+  releasing = true;
+  try {
+    for (const [code, key] of pendingModifiers) {
+      pressedKeys.set(code, key);
+      player.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }));
+    }
+  } finally { pendingModifiers.clear(); releasing = false; }
+}
+/** @param {KeyboardEvent} event */
+function handleKeyboardShortcut(event) {
+  if (!event.isTrusted || !keyboard || !playerFocused()) return false;
+  const code = event.code;
+  const modifier = modifierNames[code];
+  if (modifier && event.type === 'keydown') heldModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
+  if (modifier && event.type === 'keyup') heldModifiers.delete(code);
+  const action = keyboardActions.find(name => {
+    const binding = keyboard?.[name];
+    return binding && binding.code === code && binding.meta === event.metaKey && binding.control === event.ctrlKey && binding.alt === event.altKey && binding.shift === event.shiftKey;
+  });
+  if (event.type === 'keydown' && action) {
+    for (const key of pendingModifiers.keys()) consumedKeys.add(key);
+    pendingModifiers.clear(); consumedKeys.add(code);
+    if (!event.repeat) ipcRenderer.send('glkvm:keyboard-shortcut', action);
+    return true;
+  }
+  if (consumedKeys.has(code)) {
+    if (event.type === 'keyup') consumedKeys.delete(code);
+    return true;
+  }
+  if (event.type === 'keydown' && modifier && !pressedKeys.has(code) && keyboardActions.some(name => keyboard?.[name]?.[modifier])) {
+    pendingModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
+    return true;
+  }
+  // A normal chord, or a modifier tapped alone, retains the vendor's input behavior.
+  if (event.type === 'keydown' || event.type === 'keyup') flushModifiers();
+  return false;
+}
 
-function releaseInput() {
+function playerFocused() {
+  return !!player && (document.activeElement === player || player.contains(document.activeElement)) && !document.activeElement?.closest('input, textarea, select, [contenteditable="true"]');
+}
+function reportPlayerFocus() { ipcRenderer.send('glkvm:player-focus', playerFocused()); }
+window.addEventListener('focusin', reportPlayerFocus);
+window.addEventListener('focusout', () => queueMicrotask(reportPlayerFocus));
+let keyboardBusy = false;
+ipcRenderer.on('glkvm:keyboard-action', async (_event, command) => {
+  if (!player || !ready || !controlEnabled || moving || !playerFocused() || keyboardBusy) return;
+  const target = player;
+  if (!['insert', 'secureAttention', 'paste'].includes(command?.action)) return;
+  keyboardBusy = true;
+  releaseInput(true);
+  target.focus({ preventScroll: true });
+  try {
+    if (command.action === 'paste') {
+      if (typeof command.text !== 'string' || !command.text) return;
+      if (!['de', 'de-ch', 'en-us', 'en-gb', 'fr'].includes(command.keymap)) return;
+      // Match the vendor Toolbox's authenticated text endpoint. Do not log text or tokens.
+      const tokens = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}');
+      const token = tokens.glkvm;
+      const response = await fetch(`/api/hid/print?limit=0&keymap=${encodeURIComponent(command.keymap)}`, {
+        method: 'POST', credentials: 'same-origin', redirect: 'error',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8', ...(typeof token === 'string' ? { token } : {}) },
+        body: command.text,
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!response.ok || (await response.json()).ok !== true) throw new Error('Text could not be sent. Check the connection and remote keyboard layout. It was not retried automatically.');
+    } else {
+      const keys = command.action === 'insert' ? [{ code: 'Insert', key: 'Insert', keyCode: 45 }] : [
+        { code: 'ControlLeft', key: 'Control', keyCode: 17, location: 1 },
+        { code: 'AltLeft', key: 'Alt', keyCode: 18, location: 1 },
+        { code: 'Delete', key: 'Delete', keyCode: 46 },
+      ];
+      releasing = true;
+      try {
+        for (const key of keys) target.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }));
+      } finally {
+        for (const key of [...keys].reverse()) target.dispatchEvent(new KeyboardEvent('keyup', { ...key, bubbles: true, cancelable: true }));
+        releasing = false;
+      }
+    }
+  } catch {
+    ipcRenderer.send('glkvm:keyboard-error', 'The keyboard action could not be completed. Check the connection and paste layout. Text may have been partially sent; it was not retried.');
+  } finally { keyboardBusy = false; }
+});
+
+/** @param {unknown} [preserveLocalModifiers] */
+function releaseInput(preserveLocalModifiers = false) {
+  pendingModifiers.clear();
+  if (preserveLocalModifiers !== true) { heldModifiers.clear(); consumedKeys.clear(); }
   releasing = true;
   try {
     if (player) {
@@ -48,6 +148,7 @@ function releaseInput() {
 ipcRenderer.on('glkvm:release-input', releaseInput);
 ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
+  keyboard = mode?.keyboard;
   controlEnabled = mode?.controlEnabled === true;
   moving = mode?.moving === true;
   if (options !== (mode?.options === true)) lastChrome = '';
@@ -66,16 +167,18 @@ for (const name of [
   'dragstart', 'dragover', 'drop',
 ]) {
   window.addEventListener(name, event => {
-    if (releasing || !document.documentElement.hasAttribute('data-glkvm-clean')) return;
+    if (releasing) return;
+    if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent)) return;
     if (!controlEnabled || moving || !ready || ['dragstart', 'dragover', 'drop'].includes(name)) {
       event.preventDefault(); event.stopImmediatePropagation(); return;
     }
     if (event instanceof KeyboardEvent) {
+      if (handleKeyboardShortcut(event)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
       if (name === 'keydown') pressedKeys.set(event.code || event.key, { code: event.code, key: event.key, location: event.location });
       if (name === 'keyup') pressedKeys.delete(event.code || event.key);
     }
     if (event instanceof MouseEvent) {
-      if (name === 'mousedown') { pressedButtons.add(event.button); player?.focus({ preventScroll: true }); }
+      if (name === 'mousedown') { flushModifiers(); pressedButtons.add(event.button); player?.focus({ preventScroll: true }); }
       if (name === 'mouseup') pressedButtons.delete(event.button);
     }
   }, { capture: true, passive: false });
@@ -125,6 +228,12 @@ function update() {
   }
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
+  const streaming = hasShownVideo && ready;
+  if (lastStreaming !== streaming) {
+    if (!streaming) releaseInput();
+    lastStreaming = streaming;
+    ipcRenderer.send('glkvm:stream-state', streaming);
+  }
   if (options) {
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
     const frame = document.querySelector('#stream-window');
@@ -153,12 +262,6 @@ function update() {
     const scale = Math.min(window.innerWidth / width, window.innerHeight / height);
     root.style.setProperty('--glkvm-width', `${width * scale}px`);
     root.style.setProperty('--glkvm-height', `${height * scale}px`);
-  }
-  const streaming = hasShownVideo && ready;
-  if (lastStreaming !== streaming) {
-    if (!streaming) releaseInput();
-    lastStreaming = streaming;
-    ipcRenderer.send('glkvm:stream-state', streaming);
   }
 }
 
