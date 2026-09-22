@@ -123,6 +123,8 @@ function update() {
     const size = `${width}x${height}`;
     if (size !== lastSize) { lastSize = size; ipcRenderer.send('glkvm:video-size', { width, height }); }
   }
+  if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
+  if (!signingIn) loginReported = false;
   if (options) {
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
     const frame = document.querySelector('#stream-window');
@@ -137,8 +139,6 @@ function update() {
     return;
   }
   root.setAttribute('data-glkvm-clean', '');
-  if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
-  if (!signingIn) loginReported = false;
   status.textContent = signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
   root.toggleAttribute('data-glkvm-control', controlEnabled && !moving && ready);
   root.toggleAttribute('data-glkvm-drag', !controlEnabled || moving);

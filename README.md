@@ -39,6 +39,15 @@ it does not fall back to an ad hoc signature. App and helper bundle identifiers
 and the signing identity stay stable so macOS can recognize future updates.
 A local-network usage description is included for macOS privacy prompts.
 
+The bundle identity is `dev.layernine.glkvm-clean`; helpers use the same prefix.
+Before signing, packaging derives app-specific Mach-O UUIDs for the main executable
+and each helper from their original Electron UUID and bundle-relative path. This
+avoids collisions with Electron development runs and other Electron apps while
+keeping UUIDs reproducible when rebuilding the same runtime. Apple documents UUID
+collisions as a possible source of local-network privacy problems in
+[TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+Migrating from the previous bundle identity may require a new network permission.
+
 This is a local development signature, without notarization or an upload to Apple.
 Switching from the original ad hoc build may require a one-time permission prompt.
 Code signing preserves app identity; it does not grant privacy permissions or

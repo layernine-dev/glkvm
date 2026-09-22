@@ -187,6 +187,7 @@ server.listen(0, '127.0.0.1', async () => {
       const result = await window.settings.save(value);
       if (!result.ok) throw new Error(result.error);
     })()`);
+    await clean.webContents.session.clearStorageData({ storages: ['localstorage'] });
     clean.close();
     await waitFor(() => clean.isDestroyed());
     await settings.webContents.executeJavaScript("window.settings.open('fixture')");

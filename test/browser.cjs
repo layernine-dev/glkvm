@@ -13,6 +13,8 @@ async function waitFor(win, expression) {
 app.whenReady().then(async () => {
   /** @type {{width: number, height: number}[]} */
   const sizes = [];
+  let loginRequests = 0;
+  ipcMain.on('glkvm:login-required', () => { loginRequests++; });
   ipcMain.on('glkvm:video-size', (_event, size) => sizes.push(size));
   const win = new BrowserWindow({ width: 960, height: 540, frame: false, roundedCorners: false, hasShadow: false, show: false,
     webPreferences: { preload: path.join(__dirname, '../src/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required' },
@@ -85,6 +87,15 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript('window.logout()');
     await waitFor(win, "!document.querySelector('#glkvm-clean-status').hidden && document.querySelector('#glkvm-clean-status').textContent.includes('Sign in')");
     assert.equal(await win.webContents.executeJavaScript('getComputedStyle(document.body).visibility'), 'hidden');
+    await win.webContents.executeJavaScript('window.connect()');
+    await waitFor(win, "document.querySelector('#glkvm-clean-status').hidden");
+    win.webContents.send('glkvm:mode', { controlEnabled: true, moving: false, options: true });
+    await waitFor(win, "document.documentElement.hasAttribute('data-glkvm-options')");
+    const requestsBeforeExpiry = loginRequests;
+    await win.webContents.executeJavaScript('window.logout()');
+    await waitFor(win, "document.querySelector('#password') !== null");
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    assert.equal(loginRequests, requestsBeforeExpiry + 1, 'Expired sessions request automatic login exactly once with options visible');
     assert.deepEqual(errors, []);
     console.log('PASS: protected login/logout, isolation, edge-to-edge live video, view-only gate, native player input, coordinates, scroll, key/button release, drag mode, reconnect, aspect changes, logout');
     app.exit(0);

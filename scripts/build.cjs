@@ -1,4 +1,5 @@
 const { packager } = require('@electron/packager');
+const { personalizeExecutables } = require('./executable-uuid.cjs');
 const { version } = require('../package.json');
 const path = require('node:path');
 const { signingIdentity, verifySignature } = require('./verify-signature.cjs');
@@ -14,6 +15,7 @@ packager({
   buildVersion: version,
   platform: 'darwin', arch: process.arch === 'arm64' ? 'arm64' : 'x64',
   overwrite: true, asar: true,
+  afterExtract: [({ buildPath }) => personalizeExecutables(buildPath, 'dev.layernine.glkvm-clean')],
   extendInfo: {
     NSLocalNetworkUsageDescription: 'Connect to your configured GLKVM devices on the local network.',
   },
