@@ -178,6 +178,10 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     #glkvm-clean-surface, #glkvm-clean-drag, #glkvm-title-bar { display: none; }
     html[data-glkvm-options] { padding-top: 32px !important; box-sizing: border-box !important; }
+    /* Continue the sidebar surface below panels shorter than the video. */
+    html[data-glkvm-options], html[data-glkvm-options] body {
+      background: var(--gl-color-bg-surface1, #000) !important;
+    }
     /* Vendor viewport-height containers otherwise center a fixed-size video with empty bands. */
     html:root[data-glkvm-options][data-glkvm-sized] .kvm-page-container,
     html:root[data-glkvm-options][data-glkvm-sized] .kvm-page,
