@@ -377,7 +377,7 @@ ipcMain.on('glkvm:login-required', event => {
   const consoleEntry = showDevice(entry.device, true, true);
   consoleEntry.window.webContents.send('glkvm:check-auth');
 });
-ipcMain.on('glkvm:console-connected', event => {
+ipcMain.on('glkvm:console-authenticated', event => {
   const consoleEntry = deviceSender(event);
   if (!consoleEntry || consoles.get(consoleEntry.device.id) !== consoleEntry) return;
   const clean = windows.get(consoleEntry.device.id);
