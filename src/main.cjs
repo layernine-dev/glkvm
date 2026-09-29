@@ -448,7 +448,7 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
 
 app.on('certificate-error', (event, contents, url, error, certificate, callback) => {
   const entry = allEntries().find(({ window, device }) => window.webContents === contents && isDeviceURL(url, device));

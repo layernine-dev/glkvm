@@ -21,13 +21,16 @@ bun install
 bun start
 bun run check
 bun run test
+bun run test:startup
 bun run test:browser
 bun run build
 ```
 
 The standalone app is produced at
-`dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. It can be copied
-to `~/Applications`. Increase the patch version in `package.json` for shipped
+`dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. Install only
+the current version at `/Applications/GLKVM Clean.app`. Remove the temporary build
+after installation, point the Dock entry at that path, and use Git commits and
+pushes for history instead of retaining older app bundles. Increase the patch version in `package.json` for shipped
 code, behavior, or asset changes. Documentation-only and test-only changes do
 not need a version bump.
 
@@ -55,7 +58,7 @@ prevent macOS from requesting consent under its own policies. To verify an insta
 copy, run:
 
 ```sh
-bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
+bun run verify:signature "/Applications/GLKVM Clean.app"
 ```
 
 ## Use
@@ -168,6 +171,8 @@ tracks show a waiting message after disconnection; direct canvas transport relie
 on the vendor's own reconnect behavior. Firmware changes can require an adapter
 update. Rotated video and relative pointer lock have not been verified live.
 
+The startup test covers a duplicate launch handing off to the running instance
+and exiting before readiness without an exception.
 Unit tests cover persistence, validation, session isolation, navigation and
 certificate policy. Electron tests cover edge-to-edge moving video, login/logout,
 input and scroll delivery, coordinates after resizing, view-only blocking,
