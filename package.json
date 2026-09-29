@@ -1,13 +1,14 @@
 {
   "name": "glkvm-clean",
   "productName": "GLKVM Clean",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "Frameless GLKVM control and screen sharing with configurable connections.",
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.cjs",
+    "test:startup": "electron test/single-instance.cjs",
     "test:browser": "electron test/browser.cjs && electron test/app.cjs && electron test/keyboard-app.cjs",
     "check": "tsc --noEmit",
     "build": "node scripts/build.cjs",
