@@ -26,6 +26,16 @@ bun run test:browser
 bun run build
 ```
 
+### Dependency updates
+
+Use the newest stable releases that have completed a seven-day supply chain
+cooldown. `bunfig.toml` applies this minimum release age to newly resolved direct
+and transitive dependencies, without package exemptions. Existing lockfile entries
+are retained by ordinary installs; refresh them with `bun run deps:update`, review
+the release notes, and run the checks above before shipping. This command updates
+across major versions and keeps explicit semver ranges and a reproducible lockfile.
+Alpha, beta, and release-candidate builds are not selected by this policy.
+
 The standalone app is produced at
 `dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. Install only
 the current version at `/Applications/GLKVM Clean.app`. Remove the temporary build

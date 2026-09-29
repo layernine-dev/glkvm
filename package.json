@@ -7,6 +7,7 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
+    "deps:update": "bun update --latest",
     "test": "node --test test/*.test.cjs",
     "test:startup": "electron test/single-instance.cjs",
     "test:browser": "electron test/browser.cjs && electron test/app.cjs && electron test/keyboard-app.cjs",
