@@ -63,7 +63,8 @@ bun run verify:signature "$HOME/Applications/GLKVM Clean.app"
 1. Open GLKVM Clean while connected to your LAN or VPN network.
 2. Saved passwords sign in in the background; only the clean desktop window opens.
    For manual sign-in or a second factor, open Device Settings with ⌘⇧O.
-   The clean window reconnects once authentication succeeds. Sessions are isolated by connection ID and address.
+   The clean window reloads once authentication succeeds, even if the hidden login
+   helper has no live video. Sessions are isolated by connection ID and address.
 3. Click the video to focus the remote player, then use the keyboard and mouse.
 4. Select **GLKVM <name>** in your meeting
    app's window picker.
@@ -142,7 +143,8 @@ background; the hidden login helper reloads to use it. A blank
 field keeps an existing password; **Forget saved password** removes it on save.
 Changing a device address clears its saved password. Auto-login fills only the
 vendor login form in a hidden authentication window, once per page load. This
-window closes after success and never appears automatically. Device Settings
+window closes after successful authentication, without waiting for the vendor
+console or video, and never appears automatically. Device Settings
 uses the same login session and is shown only on explicit request.
 Second-factor prompts require manual completion. An incorrect password is not
 automatically retried; correct it in Settings and save.

@@ -10,6 +10,7 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-app-'));
 app.setPath('userData', directory);
 /** @type {{url: string, body: string}[]} */
 const pastes = [];
+let pageLoads = 0;
 const server = createServer((_req, res) => {
   if (_req.url?.startsWith('/api/hid/print')) {
     let body = '';
@@ -17,8 +18,9 @@ const server = createServer((_req, res) => {
     _req.on('end', () => { pastes.push({ url: _req.url || '', body }); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); });
     return;
   }
+  pageLoads++;
   res.setHeader('content-type', 'text/html');
-  res.end(fs.readFileSync(path.join(__dirname, 'fixture.html')));
+  res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replace('window.keyLog = [];', 'window.fixtureLoginWithoutVideo = true; window.keyLog = [];'));
 });
 /** @param {() => unknown | Promise<unknown>} condition */
 async function waitFor(condition) {
@@ -60,6 +62,9 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
 
     await waitFor(() => login.webContents.executeJavaScript("document.querySelector('#password')?.value === 'incorrect-fixture-secret'"));
+    await waitFor(() => login.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts') === '1'"));
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert.equal(await login.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts')"), '1', 'Rejected passwords are not retried or reloaded');
     command('Settings…');
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'));
     const passwordSettings = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings');
@@ -83,6 +88,11 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-bindings button')?.textContent === '⌘´'"));
     await passwordSettings.webContents.executeJavaScript("document.querySelector('#keyboard-tab').click()");
     fs.writeFileSync('/tmp/glkvm-keyboard-settings.png', (await passwordSettings.webContents.capturePage()).toPNG());
+    const loadsBeforeSuccessfulLogin = pageLoads;
+    let helperAuthenticated = false;
+    login.webContents.on('ipc-message', (_event, channel) => {
+      if (channel === 'glkvm:console-authenticated') helperAuthenticated = true;
+    });
     assert.equal(await passwordSettings.webContents.executeJavaScript(`(async () => {
       const value = await window.settings.load();
       value.devices[0].password = 'fixture-secret';
@@ -90,6 +100,9 @@ server.listen(0, '127.0.0.1', async () => {
     })()`), true);
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-control')"));
     await waitFor(() => login.isDestroyed());
+    assert.equal(helperAuthenticated, true, 'Sign-in completes without a decoded video in the hidden helper');
+    assert.equal(pageLoads, loadsBeforeSuccessfulLogin + 2, 'Saving the password reloads the helper and successful sign-in reloads the visible window once');
+    assert.equal(await clean.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts')"), '2');
     assert.equal(new URL(clean.webContents.getURL()).hash, '');
     assert.equal(BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')), false);
     const bounds = clean.getBounds();
@@ -250,6 +263,17 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(reopened.hasShadow(), true);
     assert.equal(await reopened.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar span').textContent"), 'Renamed');
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640"));
+    await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')));
+    const loadsBeforeExpiry = pageLoads;
+    await reopened.webContents.executeJavaScript("localStorage.removeItem('fixture-auth')");
+    reopened.webContents.reload();
+    await waitFor(() => pageLoads === loadsBeforeExpiry + 3);
+    await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640 && document.documentElement.hasAttribute('data-glkvm-options')"));
+    await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')));
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert.equal(pageLoads, loadsBeforeExpiry + 3, 'Session expiry creates one helper and reloads the existing options window once');
+    assert.equal(reopened.isDestroyed(), false, 'Session renewal preserves the visible window');
+    assert.equal(await reopened.webContents.executeJavaScript("document.querySelector('input[type=password]') === null"), true);
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-sized')"));
     const optionsDensity = screen.getDisplayMatching(reopened.getBounds()).scaleFactor;
     await waitFor(async () => {

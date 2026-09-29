@@ -9,7 +9,7 @@ body { margin: 0; background: #ed11aa; }
 #stream-video { width:100%;height:100%; }
 </style></head>
 <body>
-  <div id="login" class="auth-form-container"><form class="login-form" onsubmit="return false"><label>Password <input id="password" type="password"></label></form><button class="operation-btn" onclick="if(document.querySelector('#password').value === 'fixture-secret') {localStorage.setItem('fixture-auth', 'true'); window.connect()}">Login</button></div>
+  <div id="login" class="auth-form-container"><form class="login-form" onsubmit="return false"><label>Password <input id="password" type="password"></label></form><button class="operation-btn" onclick="window.signIn()">Login</button></div>
   <div id="stream-window"><div id="stream-box" tabindex="-1"><div id="video-wrapper"></div><video id="stream-video"></video></div></div>
   <script>
     window.keyLog = [];
@@ -33,6 +33,17 @@ body { margin: 0; background: #ed11aa; }
     });
     box.addEventListener('click', () => box.focus());
     let frame = 0;
+    window.signIn = () => {
+      localStorage.setItem('fixture-login-attempts', String(Number(localStorage.getItem('fixture-login-attempts') || 0) + 1));
+      if (document.querySelector('#password').value !== 'fixture-secret') return;
+      localStorage.setItem('fixture-auth', 'true');
+      localStorage.setItem('gl-kvm-token-keys', JSON.stringify({ glkvm: `fixture-token-${localStorage.getItem('fixture-login-attempts')}` }));
+      document.querySelector('#login').remove();
+      location.hash = '/';
+      // The hidden helper can stay on "Connecting" without mounting a player.
+      if (window.fixtureLoginWithoutVideo) document.querySelector('#stream-window').remove();
+      else window.connect();
+    };
     window.connect = (width = 640, height = 360) => {
       document.querySelector('#login')?.remove();
       document.querySelector('#stream-video')?.remove();
