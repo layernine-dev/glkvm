@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const { defaults } = require('../src/config.cjs');
 const { publicConfig, prepareConfig, readPassword } = require('../src/credentials.cjs');
 
-// A deterministic storage adapter exercises policy; the app integration test
-// separately verifies real safeStorage encryption and automatic sign-in.
+// Fixtures use local storage adapters; real keychain access is verified only
+// through the signed product app with its stable bundle and code identity.
 const storage = {
   isAsyncEncryptionAvailable: async () => true,
   /** @param {string} value */

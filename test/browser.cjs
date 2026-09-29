@@ -1,3 +1,4 @@
+require('./runtime.cjs');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
 const path = require('node:path');

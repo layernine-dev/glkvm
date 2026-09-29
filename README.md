@@ -21,20 +21,22 @@ bun install
 bun start
 bun run check
 bun run test
-bun run test:startup
-bun run test:browser
+bun run test:gui
 bun run build
 ```
 
 ### Dependency updates
 
-Use the newest stable releases that have completed a seven-day supply chain
+Use the newest stable releases that have completed a one-day supply chain
 cooldown. `bunfig.toml` applies this minimum release age to newly resolved direct
 and transitive dependencies, without package exemptions. Existing lockfile entries
 are retained by ordinary installs; refresh them with `bun run deps:update`, review
 the release notes, and run the checks above before shipping. This command updates
 across major versions and keeps explicit semver ranges and a reproducible lockfile.
 Alpha, beta, and release-candidate builds are not selected by this policy.
+Do not extend the cooldown beyond 24 hours. If Bun's rapid-release stability
+heuristic selects an older version, resolve the latest eligible version explicitly
+through the same age gate, then retain a semver range in the manifest.
 
 The standalone app is produced at
 `dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. Install only
@@ -51,6 +53,14 @@ The build fails if the identity is missing or signature verification fails;
 it does not fall back to an ad hoc signature. App and helper bundle identifiers
 and the signing identity stay stable so macOS can recognize future updates.
 A local-network usage description is included for macOS privacy prompts.
+
+`bun start` and the GUI test commands build and verify a signed GLKVM bundle
+before launching it. GUI fixtures run in a separate test bundle with the same
+bundle ID, signing identity, and helper identities, using temporary profiles.
+Their password storage adapter remains local to the test process and never
+accesses the macOS keychain. Real Keychain integration must be checked through
+the signed product app. Generic Electron launches are rejected before credentials
+can be accessed. The production bundle excludes the test runner and fixtures.
 
 The bundle identity is `dev.layernine.glkvm-clean`; helpers use the same prefix.
 Before signing, packaging derives app-specific Mach-O UUIDs for the main executable
