@@ -7,7 +7,7 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "node scripts/run-app.cjs",
-    "deps:update": "bun update --latest",
+    "deps:update": "bun scripts/update-dependencies.cjs",
     "test": "node --test test/*.test.cjs",
     "test:startup": "node scripts/run-app.cjs single-instance",
     "test:browser": "node scripts/run-app.cjs browser app keyboard-app",
