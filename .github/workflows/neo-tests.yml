@@ -20,6 +20,7 @@ jobs:
       - name: Run tests in the shared Neo slot
         shell: zsh "{0}"
         run: |
+          export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           python3 "$HOME/dev/my/macos/scripts/neo-test-lock.py" /bin/zsh -e -c '
             eval "$(fnm env --shell zsh)"
