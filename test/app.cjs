@@ -1,3 +1,4 @@
+require('./runtime.cjs');
 const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen, clipboard } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');

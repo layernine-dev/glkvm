@@ -1,0 +1,3 @@
+[install]
+# Resolve direct and transitive packages after a one-day release cooldown.
+minimumReleaseAge = 86400

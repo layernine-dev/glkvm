@@ -1,3 +1,4 @@
+require('./runtime.cjs');
 const { app } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,7 +23,7 @@ if (childMode) {
   app.on('second-instance', () => { handoffs++; });
   app.whenReady().then(async () => {
     try {
-      const child = spawn(process.execPath, [__filename, '--child', directory], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, ['--glkvm-test=single-instance', '--child', directory], { stdio: ['ignore', 'pipe', 'pipe'] });
       let output = '';
       let errors = '';
       child.stdout.on('data', chunk => { output += chunk; });
