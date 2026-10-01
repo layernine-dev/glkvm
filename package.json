@@ -1,23 +1,25 @@
 {
   "name": "glkvm-clean",
   "productName": "GLKVM Clean",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "Frameless GLKVM control and screen sharing with configurable connections.",
   "main": "src/main.cjs",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/run-app.cjs",
+    "deps:update": "bun scripts/update-dependencies.cjs",
     "test": "node --test test/*.test.cjs",
-    "test:startup": "electron test/single-instance.cjs",
-    "test:browser": "electron test/browser.cjs && electron test/app.cjs && electron test/keyboard-app.cjs",
+    "test:startup": "node scripts/run-app.cjs single-instance",
+    "test:browser": "node scripts/run-app.cjs browser app keyboard-app",
+    "test:gui": "node scripts/run-app.cjs single-instance browser app keyboard-app",
     "check": "tsc --noEmit",
     "build": "node scripts/build.cjs",
     "verify:signature": "node scripts/verify-signature.cjs"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "@types/node": "^26.6.2",
-    "electron": "^44.4.3",
+    "@types/node": "^26.6.3",
+    "electron": "^44.4.5",
     "typescript": "^7.0.2"
   },
   "trustedDependencies": [

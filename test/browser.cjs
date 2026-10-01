@@ -1,6 +1,11 @@
+require('./runtime.cjs');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-browser-'));
+app.setPath('userData', directory);
 
 /** @param {Electron.BrowserWindow} win @param {string} expression */
 async function waitFor(win, expression) {
@@ -98,6 +103,11 @@ app.whenReady().then(async () => {
     assert.equal(loginRequests, requestsBeforeExpiry + 1, 'Expired sessions request automatic login exactly once with options visible');
     assert.deepEqual(errors, []);
     console.log('PASS: protected login/logout, isolation, edge-to-edge live video, view-only gate, native player input, coordinates, scroll, key/button release, drag mode, reconnect, aspect changes, logout');
+    fs.rmSync(directory, { recursive: true, force: true });
     app.exit(0);
-  } catch (error) { console.error(error); app.exit(1); }
+  } catch (error) {
+    console.error(error);
+    fs.rmSync(directory, { recursive: true, force: true });
+    app.exit(1);
+  }
 });

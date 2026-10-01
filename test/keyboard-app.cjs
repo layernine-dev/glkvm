@@ -1,3 +1,4 @@
+require('./runtime.cjs');
 const { app, BrowserWindow, clipboard } = require('electron');
 const { createServer } = require('node:http');
 const fs = require('node:fs');

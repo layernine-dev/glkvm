@@ -1,0 +1,29 @@
+name: macOS tests
+on:
+  push:
+  workflow_dispatch:
+env:
+  GLKVM_TEST_LOCK: ${{ secrets.GLKVM_TEST_LOCK }}
+permissions:
+  contents: read
+concurrency:
+  group: glkvm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: [self-hosted, macOS, ARM64, glkvm-macos]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run tests in the shared macOS slot
+        shell: zsh "{0}"
+        run: |
+          export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+          export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          caffeinate -d -i -u python3 "$GLKVM_TEST_LOCK" /bin/zsh -e -c '
+            eval "$(fnm env --shell zsh)"
+            bun install --frozen-lockfile
+            bun run check
+            bun run test
+            bun run test:gui
+          '

@@ -1,4 +1,8 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard } = require('electron');
+if (process.platform === 'darwin' && !app.isPackaged) {
+  console.error('Use bun start to run the signed GLKVM app. Generic Electron cannot access app credentials.');
+  app.exit(1);
+}
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
