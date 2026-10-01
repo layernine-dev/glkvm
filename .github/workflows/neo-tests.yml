@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run tests in the shared Neo slot
-        shell: zsh {0}
+        shell: zsh "{0}"
         run: |
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           python3 "$HOME/dev/my/macos/scripts/neo-test-lock.py" /bin/zsh -e -c '
@@ -32,5 +32,5 @@ jobs:
           '
       - name: Report test failure
         if: failure() || cancelled()
-        shell: zsh {0}
+        shell: zsh "{0}"
         run: '"$HOME/dev/my/vps/scripts/healthchecks-ping.zsh" neo-glkvm-tests fail'
