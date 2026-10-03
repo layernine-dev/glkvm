@@ -30,6 +30,7 @@ async function buildApp({ tests = false } = {}) {
     }] : [],
     extendInfo: {
       NSLocalNetworkUsageDescription: 'Connect to your configured GLKVM devices on the local network.',
+      NSMicrophoneUsageDescription: 'Send your selected microphone to a GLKVM device when you turn on its microphone.',
     },
     osxSign: {
       identity: signingIdentity,
