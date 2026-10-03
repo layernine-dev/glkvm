@@ -22,6 +22,7 @@ bun start
 bun run check
 bun run test
 bun run test:gui
+bun run test:devices   # optional, read-only check against this Mac's audio devices
 bun run build
 ```
 
@@ -56,6 +57,10 @@ microphones. If several such identities exist, set
 can be chosen or signing or verification fails; it does not fall back to an ad
 hoc signature. App and helper bundle identifiers stay stable, and each Mac
 should keep using the same identity so macOS can recognize future updates.
+The bundled audio device catalog (`Contents/Resources/glkvm-audio-catalog`, built
+from `native/audio-catalog.swift` with the Xcode command line tools) is signed
+with the same identity as `dev.layernine.glkvm-clean.audio-catalog`, with
+Hardened Runtime and no entitlements.
 Local-network and microphone usage descriptions are included for macOS privacy prompts.
 
 `bun start` and the GUI test commands build and verify a signed GLKVM bundle
@@ -151,12 +156,27 @@ connections), **System default**, or a specific device; speakers offer
 **System default** or a specific device. The app never changes the macOS
 default input or output.
 
-Device lists come from that connection's open window, because Chromium scopes
-device IDs to each connection's address and session. Open the connection to list
-or change its devices; saved choices are kept while it is closed or a device is
-unplugged. Microphone names are listed only after a microphone choice is enabled
-and saved for that connection. Changing a connection's address resets its device
-choices (a specific microphone becomes disabled, speakers use the system default).
+All microphones and speakers on this Mac are listed for every connection, also
+while it is closed and while its microphone is disabled. The list comes from a
+small bundled CoreAudio catalog that only reads device properties: it needs no
+microphone permission, never opens a device and follows devices as they are
+plugged in or removed. Devices with the same name show their connection type and
+the end of their device UID. Choices are saved by macOS device UID, are kept when a
+device is unplugged or the connection's address changes, and are shown as
+unavailable while the device is missing.
+
+Chromium gives each connection its own ID for a device (an HMAC of the device UID
+with the connection's address and session salt). The app computes that ID and uses
+a choice only after the connection's own page lists exactly that ID; until then,
+and whenever it cannot be proven, the choice stays silent and the window muted
+instead of falling back to the system default. A connection opened for the first
+time needs up to about 10 seconds for this, as does one whose cookies were
+cleared. This uses Electron and Chromium internals (see `src/device-ids.cjs`),
+verified for Electron 44.5.1 and Chromium 152.0.7977.130; after an Electron update,
+specific devices stay silent until `bun run test:gui` and `bun run test:devices`
+pass with the new version and it is added there. Device choices saved by older
+versions are converted only when they are exactly the ID of a current device;
+others are kept and stay silent until chosen again.
 
 The device page still decides when to use the microphone: nothing is captured
 until it turns on its own microphone. Focus and settings changes switch an active
@@ -168,10 +188,12 @@ device is closed when the page has stopped its microphone track and every copy o
 speaker that is unavailable mutes that window. Neither falls back to another
 device. While a speaker change is in progress the window stays muted; each change
 is numbered, so a late confirmation of an earlier choice cannot unmute it. Players
-start only on the selected speaker; if it cannot be applied, playback is refused
-and the window stays muted instead of using the system default. New
+wait for a resolved speaker to be applied and reject playback if applying it fails.
+While the speaker is unresolved, a player may run on its retained device, but the
+window stays muted and is never rerouted to the system default. New
 page audio contexts start without an output device until the selected speaker
-is applied. Settings shows each open connection's microphone and speaker status. App
+is applied. Settings shows each open connection's microphone and speaker status
+and, read-only, whether macOS microphone access was granted. App
 muting in Controls still applies on top of these choices.
 
 macOS asks once for microphone access for GLKVM Clean the first time a device page

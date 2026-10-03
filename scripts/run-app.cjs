@@ -4,7 +4,7 @@ const { buildApp } = require('./build.cjs');
 
 async function main() {
   const tests = process.argv.slice(2);
-  if (tests.some(test => !['single-instance', 'browser', 'app', 'keyboard-app', 'audio-app'].includes(test))) {
+  if (tests.some(test => !['single-instance', 'browser', 'app', 'keyboard-app', 'audio-app', 'device-id-app', 'device-real-app'].includes(test))) {
     throw new Error('Unknown GUI test.');
   }
   const appPath = await buildApp({ tests: tests.length > 0 });

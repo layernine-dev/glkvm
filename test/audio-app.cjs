@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { defaults } = require('../src/config.cjs');
+const fakeCatalog = require('./fake-catalog.cjs');
+const { readDeviceIdSalt } = require('../src/device-ids.cjs');
 
 // Chromium's fake capture and output devices: no microphone or speaker hardware is used.
 app.commandLine.appendSwitch('use-fake-device-for-media-stream');
@@ -45,10 +47,11 @@ const vendorScript = `<script>
   };
   window.sinks = () => [...document.querySelectorAll('.remote-audio')].map(audio => audio.sinkId);
   // Test control: slow down speaker changes, as a slow audio device would, or make players reject them.
-  window.sinkDelay = 0; window.sinkFail = false;
+  window.sinkDelay = 0; window.sinkFail = false; window.sinkCalls = [];
   for (const proto of [HTMLMediaElement.prototype, Object.getPrototypeOf(AudioContext.prototype)]) {
     const original = proto.setSinkId;
     proto.setSinkId = function setSinkId(id) {
+      window.sinkCalls.push(id);
       const fail = window.sinkFail && this instanceof HTMLMediaElement;
       if (!window.sinkDelay && !fail) return original.call(this, id);
       return new Promise(resolve => setTimeout(resolve, window.sinkDelay)).then(() => fail ? Promise.reject(new DOMException('Test speaker failure.', 'AbortError')) : original.call(this, id));
@@ -60,9 +63,9 @@ const server = createServer((_req, res) => {
   res.setHeader('content-type', 'text/html');
   res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replace('<script>', '<script>localStorage.setItem("fixture-auth", "true");').replace('</body>', vendorScript));
 });
-/** @param {() => unknown | Promise<unknown>} condition @param {string} [label] */
-async function waitFor(condition, label = 'application state') {
-  for (let i = 0; i < 100; i++) {
+/** @param {() => unknown | Promise<unknown>} condition @param {string} [label] @param {number} [tries] */
+async function waitFor(condition, label = 'application state', tries = 100) {
+  for (let i = 0; i < tries; i++) {
     if (await condition()) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -85,6 +88,7 @@ server.listen(0, '127.0.0.1', async () => {
     { id: 'second', name: 'Second', origin: `http://localhost:${address.port}`, openAtStartup: true },
   ];
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(config));
+  fakeCatalog.setDevices(fakeCatalog.fakeDevices());
   await app.whenReady();
   require('../src/main.cjs');
   try {
@@ -105,6 +109,8 @@ server.listen(0, '127.0.0.1', async () => {
     if (!inputs.every(device => /^Fake /.test(device.label)) || !outputs.every(device => /^Fake /.test(device.label))) throw new Error(`Refusing to test with real devices: ${firstDevices.map(device => device.label).join(', ')}`);
     assert.equal(inputs.length, 2); assert.equal(outputs.length, 2);
     await waitFor(() => reports.get(second.webContents.id), 'second connection devices');
+    // New sessions persist their device ID salt up to 10 seconds after the first device request.
+    for (const win of [first, second]) await waitFor(() => readDeviceIdSalt(/** @type {string} */ (win.webContents.session.getStoragePath())), 'persisted device ID salt', 200);
     const secondDevices = /** @type {{kind: string, deviceId: string, label: string}[]} */ (reports.get(second.webContents.id));
     assert.equal(secondDevices.some(device => device.kind === 'audioinput'), false, 'A connection without a microphone gets no microphone names');
     assert.ok(secondDevices.some(device => device.kind === 'audiooutput'), 'Speaker selection is separate from microphone access');
@@ -114,8 +120,11 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'));
     const settings = /** @type {Electron.BrowserWindow} */ (BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings'));
     await waitFor(() => !settings.webContents.isLoading() && run(settings, "document.querySelector('.audio-foreground-input') !== null"));
+    // Settings save native UIDs; the page sees them as its own hashed IDs.
     const [mic1, mic2] = inputs;
     const [speaker1, speaker2] = outputs;
+    const uids = new Map([[mic1, 'fake_audio_input_1'], [mic2, 'fake_audio_input_2'], [speaker1, 'fake_audio_output_1'], [speaker2, 'fake_audio_output_2']]);
+    assert.deepEqual([mic1.label, mic2.label, speaker1.label, speaker2.label], ['Fake Audio Input 1', 'Fake Audio Input 2', 'Fake Audio Output 1', 'Fake Audio Output 2']);
     /** @param {(value: any) => void} edit */
     const save = async edit => {
       const value = await run(settings, 'window.settings.load()');
@@ -124,7 +133,7 @@ server.listen(0, '127.0.0.1', async () => {
       const result = await run(settings, `window.settings.save(${JSON.stringify(value)}).then(result => { if (result.ok) { config = result.config; render(); } return result; })`);
       assert.equal(result.ok, true, result.error);
     };
-    const pick = (/** @type {{deviceId: string, label: string}} */ device) => ({ deviceId: device.deviceId, label: device.label });
+    const pick = (/** @type {{kind: string, deviceId: string, label: string}} */ device) => ({ uid: /** @type {string} */ (uids.get(device)), label: device.label });
     await save(value => {
       value.devices[0].audio = { foreground: { input: pick(mic1), output: pick(speaker1) }, background: { input: pick(mic2), output: pick(speaker2) } };
     });
@@ -173,14 +182,15 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => first.isFocused() && status(first)?.inputDevice === mic1.deviceId, 'restored foreground');
 
     // Missing devices stay silent and are reported; no fallback to another device.
-    const gone = { deviceId: 'f'.repeat(64), label: 'Unplugged' };
+    const gone = { uid: 'AppleUSBAudioEngine:Unplugged:1', label: 'Unplugged' };
     await save(value => { value.devices[0].audio.foreground = { input: gone, output: gone }; });
     await waitFor(() => status(first)?.input === 'missing' && status(first)?.outputState === 'missing', 'missing devices');
     assert.equal(status(first)?.inputDevice, null, 'No microphone is sending');
     assert.equal(first.webContents.isAudioMuted(), true, 'A missing speaker mutes the window');
     assert.equal(await run(first, 'window.mic.track.readyState'), 'live', 'The vendor track survives for a later replug');
     const shown = await run(settings, `(() => { const select = document.querySelector('.audio-foreground-input'); return { value: select.value, text: select.selectedOptions[0].textContent, status: document.querySelector('.audio-status').textContent }; })()`);
-    assert.deepEqual([shown.value, shown.text], [`device:${gone.deviceId}`, 'Unplugged — not available'], 'The unavailable choice is retained');
+    assert.deepEqual([shown.value, shown.text], [`uid:${gone.uid}`, 'Unplugged — not available'], 'The unavailable choice is retained');
+    assert.equal(status(first)?.output, null, 'An unresolved speaker is never sent as the system default');
     assert.match(shown.status, /Selected microphone unavailable/);
     await save(value => { value.devices[0].audio.foreground = { input: 'disabled', output: pick(speaker1) }; });
     await waitFor(() => status(first)?.input === 'disabled' && status(first)?.inputDevice === null && !first.webContents.isAudioMuted(), 'disabled microphone');
@@ -344,11 +354,59 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(Date.now() - disabledAt < 1000, 'Disabled before the pending request resolved');
     await new Promise(resolve => setTimeout(resolve, 2000));
     assert.deepEqual([status(first)?.input, status(first)?.inputDevice, status(first)?.openInputs], ['disabled', null, 0], 'The superseded request was closed');
+    // Same for a choice that cannot be resolved: device A goes silent at once while the
+    // request for B is pending, and B is closed when it resolves.
+    await save(value => { value.devices[0].audio.background.input = pick(mic1); });
+    await waitFor(() => status(first)?.input === 'live' && status(first)?.inputDevice === mic1.deviceId && status(first)?.openInputs === 1, 'background device A live');
+    const before = requests;
+    await save(value => { value.devices[0].audio.background.input = pick(mic2); });
+    await waitFor(() => requests === before + 1, 'pending request for device B');
+    assert.equal(status(first)?.inputDevice, mic1.deviceId, 'Device A is used until device B is ready');
+    const missingAt = Date.now();
+    await save(value => { value.devices[0].audio.background.input = gone; });
+    await waitFor(() => status(first)?.input === 'missing' && status(first)?.inputDevice === null && status(first)?.openInputs === 0, 'immediate silence for an unresolved device');
+    assert.ok(Date.now() - missingAt < 1000, 'Silent before the pending request resolved');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    assert.deepEqual([status(first)?.input, status(first)?.inputDevice, status(first)?.openInputs], ['missing', null, 0], 'The request for device B was closed');
+
+    // A route that loses its speaker while the previous speaker is still being checked
+    // never applies anything, and never the system default. Both routes reach the page
+    // back to back, so the second arrives while the first one's device list is pending.
+    await save(value => { value.devices[0].audio.background.output = pick(speaker2); });
+    await waitFor(() => status(first)?.output === speaker2.deviceId && status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'background speaker before the race');
+    const contents = first.webContents;
+    const send = contents.send;
+    /** @type {unknown[] | null} */
+    let held = null;
+    contents.send = (channel, ...args) => {
+      if (channel !== 'glkvm:audio-route') return send.call(contents, channel, ...args);
+      if (!held && args[0]?.output === speaker1.deviceId) { held = args; return; }
+      if (held) send.call(contents, channel, ...held);
+      held = null;
+      send.call(contents, channel, ...args);
+    };
+    await run(first, 'window.sinkCalls = []');
+    await save(value => { value.devices[0].audio.background.output = pick(speaker1); });
+    assert.ok(held, 'The route to the other speaker is held back');
+    /** @type {string[]} */
+    const raceLeaks = [];
+    const watchRace = setInterval(() => { if (!first.webContents.isAudioMuted() && status(first)?.output !== speaker2.deviceId) raceLeaks.push(JSON.stringify(status(first))); }, 5);
+    await save(value => { value.devices[0].audio.background.output = gone; });
+    contents.send = send;
+    await waitFor(() => status(first)?.output === null && status(first)?.outputState === 'missing', 'speaker lost during the device check');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    clearInterval(watchRace);
+    assert.deepEqual(await run(first, 'window.sinkCalls'), [], 'Nothing was applied while the speaker was unresolved, not even the system default');
+    assert.ok((await run(first, 'window.sinks()')).every((/** @type {string} */ sink) => sink === speaker2.deviceId), 'Players keep the previous speaker');
+    assert.deepEqual(raceLeaks, [], 'Muted throughout');
+    assert.equal(first.webContents.isAudioMuted(), true, 'Still muted while the speaker is missing');
+    await save(value => { value.devices[0].audio.background.output = pick(speaker2); });
+    await waitFor(() => status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'speaker restored after the race');
 
     await run(settings, "document.querySelector('#connections-tab').click()");
     await waitFor(() => run(settings, `document.querySelector('.audio-foreground-input').textContent.includes(${JSON.stringify(mic1.label)})`), 'settings device names');
     if (evidence) fs.writeFileSync(path.join(evidence, 'settings-audio.png'), (await settings.webContents.capturePage()).toPNG());
-    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable during a pending device request');
+    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable and immediate silence for an unresolved device during a pending device request, speaker lost during the device check applies nothing (no system default) and stays muted');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Statuses:', JSON.stringify([...statuses]));
