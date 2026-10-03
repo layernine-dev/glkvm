@@ -3,10 +3,13 @@ const { personalizeExecutables } = require('./executable-uuid.cjs');
 const { version } = require('../package.json');
 const fs = require('node:fs');
 const path = require('node:path');
-const { signingIdentity, verifySignature } = require('./verify-signature.cjs');
+const { resolveSigningIdentity } = require('./signing-identity.cjs');
+const { verifySignature } = require('./verify-signature.cjs');
 
 /** @param {{tests?: boolean}} [options] */
 async function buildApp({ tests = false } = {}) {
+  // Resolve once so packaging and verification use the same certificate.
+  const signingIdentity = resolveSigningIdentity();
   const paths = await packager({
     dir: path.join(__dirname, '..'),
     out: path.join(__dirname, tests ? '../dist/test-runtime' : '../dist'),
@@ -32,6 +35,7 @@ async function buildApp({ tests = false } = {}) {
       identity: signingIdentity,
       type: 'development',
       identityValidation: true,
+      continueOnError: false,
       strictVerify: true,
       preAutoEntitlements: false,
       preEmbedProvisioningProfile: false,
@@ -44,7 +48,7 @@ async function buildApp({ tests = false } = {}) {
     ignore: [...(tests ? [] : [/^\/test($|\/)/]), /^\/scripts($|\/)/, /^\/tsconfig\.json$/, /^\/bun\.lock$/, /^\/bunfig\.toml$/, /^\/AGENTS\.md$/, /^\/README\.md$/],
   });
   const appPath = path.join(paths[0], 'GLKVM Clean.app');
-  verifySignature(appPath);
+  verifySignature(appPath, signingIdentity);
   return appPath;
 }
 

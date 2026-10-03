@@ -46,12 +46,15 @@ pushes for history instead of retaining older app bundles. Increase the patch ve
 code, behavior, or asset changes. Documentation-only and test-only changes do
 not need a version bump.
 
-Builds are signed with the local Keychain identity
-`Apple Development: Uwe Schwarz (54988A349V)`, including Electron helpers and
-frameworks, with Hardened Runtime and only the JIT entitlement required by V8.
-The build fails if the identity is missing or signature verification fails;
-it does not fall back to an ad hoc signature. App and helper bundle identifiers
-and the signing identity stay stable so macOS can recognize future updates.
+Builds are signed with the Mac's valid Apple Development identity from the
+Keychain, including Electron helpers and frameworks, with Hardened Runtime and
+only the JIT entitlement required by V8. If several such identities exist, set
+`GLKVM_SIGNING_IDENTITY` to the exact name shown by
+`security find-identity -v -p codesigning`, for example
+`Apple Development: Uwe Schwarz (54988A349V)`. The build fails if no identity
+can be chosen or signing or verification fails; it does not fall back to an ad
+hoc signature. App and helper bundle identifiers stay stable, and each Mac
+should keep using the same identity so macOS can recognize future updates.
 A local-network usage description is included for macOS privacy prompts.
 
 `bun start` and the GUI test commands build and verify a signed GLKVM bundle
