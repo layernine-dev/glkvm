@@ -47,15 +47,16 @@ code, behavior, or asset changes. Documentation-only and test-only changes do
 not need a version bump.
 
 Builds are signed with the Mac's valid Apple Development identity from the
-Keychain, including Electron helpers and frameworks, with Hardened Runtime and
-only the JIT entitlement required by V8. If several such identities exist, set
+Keychain, including Electron helpers and frameworks, with Hardened Runtime, the
+JIT entitlement required by V8, and the audio-input entitlement for connection
+microphones. If several such identities exist, set
 `GLKVM_SIGNING_IDENTITY` to the exact name shown by
 `security find-identity -v -p codesigning`, for example
 `Apple Development: Uwe Schwarz (54988A349V)`. The build fails if no identity
 can be chosen or signing or verification fails; it does not fall back to an ad
 hoc signature. App and helper bundle identifiers stay stable, and each Mac
 should keep using the same identity so macOS can recognize future updates.
-A local-network usage description is included for macOS privacy prompts.
+Local-network and microphone usage descriptions are included for macOS privacy prompts.
 
 `bun start` and the GUI test commands build and verify a signed GLKVM bundle
 before launching it. GUI fixtures run in a separate test bundle with the same
@@ -139,6 +140,43 @@ Saving an address change closes the old connection; use **Open** to connect to
 the new address. Removing a connection closes its windows but retains its local
 session data. Removing all connections opens Settings at the next launch.
 
+### Audio per connection
+
+Each connection has its own microphone and speaker for two situations:
+**Focused window** (its window is focused, visible and not minimized, including
+with device options shown) and **In background** (any other state, including
+while Settings or another app is focused). Returning focus restores the focused
+choices. Options are **Microphone disabled** (the default, also for existing
+connections), **System default**, or a specific device; speakers offer
+**System default** or a specific device. The app never changes the macOS
+default input or output.
+
+Device lists come from that connection's open window, because Chromium scopes
+device IDs to each connection's address and session. Open the connection to list
+or change its devices; saved choices are kept while it is closed or a device is
+unplugged. Microphone names are listed only after a microphone choice is enabled
+and saved for that connection. Changing a connection's address resets its device
+choices (a specific microphone becomes disabled, speakers use the system default).
+
+The device page still decides when to use the microphone: nothing is captured
+until it turns on its own microphone. Focus and settings changes switch an active
+microphone to the profile's device without restarting the page's stream, and keep
+the page's own microphone mute. A disabled profile, or disabling the microphone for
+the whole connection, sends silence and releases the device at once, even while a
+slower device is still opening; enabling it again restores the page's stream. The
+device is closed when the page has stopped its microphone track and every copy of it. A selected microphone that is unavailable sends nothing; a selected
+speaker that is unavailable mutes that window. Neither falls back to another
+device. While a speaker change is in progress the window stays muted; each change
+is numbered, so a late confirmation of an earlier choice cannot unmute it. Players
+start only on the selected speaker; if it cannot be applied, playback is refused
+and the window stays muted instead of using the system default. New
+page audio contexts start without an output device until the selected speaker
+is applied. Settings shows each open connection's microphone and speaker status. App
+muting in Controls still applies on top of these choices.
+
+macOS asks once for microphone access for GLKVM Clean the first time a device page
+turns on a microphone that is enabled here.
+
 The **Controls** page sets the default keyboard/mouse mode and app audio muting.
 Changing the default input mode also applies it to open KVM windows. The per-window
 menu toggle lasts until the window closes or that default changes. App audio
@@ -159,8 +197,16 @@ Chrome trust settings are not modified.
 
 Remote renderers are sandboxed with context isolation and no Node or settings
 bridge. Navigation is restricted to the configured device origin. The app blocks
-arbitrary popup windows, downloads, and local camera, microphone, and clipboard
-permissions. Pointer lock is allowed for the vendor's relative mouse mode.
+arbitrary popup windows, downloads, camera and clipboard permissions. Microphone
+capture is allowed only for the visible connection window's main frame, on its
+exact address, as an audio-only request, when that connection's current profile
+has a microphone enabled. Microphone names follow the same rule; speaker selection
+is allowed separately for that main frame. Subframes and hidden login helpers are
+always denied, and helpers stay muted. Pointer lock is allowed for the vendor's
+relative mouse mode. A small adapter installed in the page's main world before the
+vendor scripts routes audio. It uses Electron's `contextBridge.executeInMainWorld`
+and adds nothing to `window`. Its device and status reports are validated in the
+main process.
 The local settings page has its own limited IPC bridge, a restrictive content
 security policy, and main-frame/sender checks. Settings contain only encrypted password data, protected by Electron safeStorage
 and the macOS keychain. Plaintext passwords are never returned to the settings page.
@@ -201,6 +247,19 @@ certificate policy. Electron tests cover edge-to-edge moving video, login/logout
 input and scroll delivery, coordinates after resizing, view-only blocking,
 key/button release, moving, reconnects, integrated device controls, unchanged window identity, restored clean bounds,
 connection shortcuts and active-device menus, and real settings IPC/save behavior.
+
+The audio GUI test uses Chromium's fake microphones and speakers only and stops
+before any capture if real devices appear. It covers device scoping between
+connections, foreground/background/minimized routing, switching an active
+microphone while keeping the page's track and mute, speaker routing for existing
+and new players, rapid focus changes, unavailable devices, global mute,
+permission denials and cleanup. It also covers slow speaker changes (A → B → A),
+new audio contexts, refused playback when a speaker cannot be applied, players
+waiting across a speaker change, copies of the microphone track or stream and
+stops from other frames,
+disabling and re-enabling a connection's microphone, re-listing device names, and
+disabling while a slower device request is pending. Real hardware, unplugging a device, and the
+firmware's own microphone button still need a live check.
 
 Live video and settings require actual devices. A passing local capture or build
 does not prove sharing in a particular meeting app; Teams capture requires its

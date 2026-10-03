@@ -1,4 +1,4 @@
-const { ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 // No bridge is exposed to the remote page. Its original player and input handlers
 // remain in place; only the presentation and the view-only input gate change.
@@ -382,3 +382,358 @@ window.addEventListener('DOMContentLoaded', () => {
   ipcRenderer.send('glkvm:ready');
   update();
 }, { once: true });
+
+/**
+ * Connection-local audio routing. Runs in the page's main world before vendor
+ * scripts, because the vendor player owns capture and playback there. This
+ * function is serialized: it must not reference anything outside its body.
+ * The bridge is only reachable from this closure; nothing is added to `window`.
+ * @param {{subscribe(onRoute: (route: import('./audio.cjs').SentRoute) => void, onRefresh: () => void): void, devices(list: {kind: string, deviceId: string, label: string}[]): void, status(status: import('./audio.cjs').AudioStatus): void}} bridge
+ */
+function installAudioRouting(bridge) {
+  const mediaDevices = navigator.mediaDevices;
+  if (!mediaDevices) return;
+  const nativeGetUserMedia = MediaDevices.prototype.getUserMedia;
+  const nativeEnumerate = MediaDevices.prototype.enumerateDevices;
+  const nativePlay = HTMLMediaElement.prototype.play;
+  const nativePause = HTMLMediaElement.prototype.pause;
+  const nativeStop = MediaStreamTrack.prototype.stop;
+  const NativeAudioContext = window.AudioContext;
+  const NativeMediaStream = window.MediaStream;
+  const srcObject = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'srcObject'));
+  /** @type {import('./audio.cjs').SentRoute | null} */
+  let route = null;
+  /** @type {(value?: unknown) => void} */
+  let routeArrived = () => {};
+  const firstRoute = new Promise(resolve => { routeArrived = resolve; });
+
+  // Output: every media element and page AudioContext follows the selected sink.
+  /** @typedef {(HTMLMediaElement | AudioContext) & {setSinkId(id: string | {type: 'none'}): Promise<void>, sinkId: unknown}} Sink */
+  /** @type {Set<WeakRef<Sink>>} */
+  const sinks = new Set();
+  const knownSinks = new WeakSet();
+  /** Only 'ok' lets the main process unmute, and only for the generation it was reported with.
+   * @type {'pending' | 'ok' | 'missing' | 'error'} */
+  let outputState = 'pending';
+  let outputVersion = 0;
+  /** @type {WeakMap<Sink, {id: string, promise: Promise<void>}>} */
+  const pendingSinks = new WeakMap();
+  /** @param {Sink} target */
+  const sinkMatches = target => !pendingSinks.has(target) && target.sinkId === (route?.output ?? '');
+  /** Overlapping setSinkId calls abort each other, so share one per element and device.
+   * @param {Sink} target */
+  const applySink = target => {
+    const wanted = route?.output ?? '';
+    const pending = pendingSinks.get(target);
+    if (pending?.id === wanted) return pending.promise;
+    if (!pending && target.sinkId === wanted) return Promise.resolve();
+    const promise = (pending ? pending.promise.catch(() => {}) : Promise.resolve()).then(() => target.setSinkId(wanted))
+      .finally(() => { if (pendingSinks.get(target)?.promise === promise) pendingSinks.delete(target); });
+    pendingSinks.set(target, { id: wanted, promise });
+    return promise;
+  };
+  /** Chromium rejects setSinkId for players whose stream has no audio track; they cannot output anything.
+   * Any other player can start or gain audio later, so its failed speaker change is an error.
+   * @param {Sink} target */
+  const silent = target => {
+    if (!(target instanceof HTMLMediaElement)) return target.state === 'closed';
+    const source = srcObject.get?.call(target);
+    return source instanceof NativeMediaStream && !source.getAudioTracks().length;
+  };
+  /** Nothing to apply: no route yet or a missing speaker (both keep the window muted), or already routed.
+   * @param {Sink} target */
+  const routed = target => !route || outputState === 'missing' || silent(target) || sinkMatches(target);
+  const refreshOutput = async () => {
+    if (!route) return;
+    const version = ++outputVersion;
+    const wanted = route.output;
+    /** @type {'ok' | 'missing' | 'error'} */
+    let state = 'ok';
+    try {
+      // Never fall back: a missing device stays missing and the window stays muted.
+      if (wanted && !(await nativeEnumerate.call(mediaDevices)).some(device => device.kind === 'audiooutput' && device.deviceId === wanted)) state = 'missing';
+      else {
+        for (const ref of sinks) if (!ref.deref()) sinks.delete(ref);
+        const targets = [...sinks].map(ref => ref.deref()).filter(sink => sink !== undefined);
+        const results = await Promise.allSettled(targets.map(applySink));
+        if (results.some((result, index) => result.status === 'rejected' && !silent(targets[index]))) state = 'error';
+      }
+    } catch { state = 'error'; }
+    if (version !== outputVersion) return;
+    outputState = state;
+    report();
+  };
+  /** A new audible target whose sink still differs withdraws the confirmation until it is routed.
+   * @param {unknown} target */
+  const register = target => {
+    if (!target) return;
+    const sink = /** @type {Sink} */ (target);
+    if (!knownSinks.has(sink)) { knownSinks.add(sink); sinks.add(new WeakRef(sink)); }
+    if (!route || outputState === 'missing' || sinkMatches(sink)) return;
+    const quiet = silent(sink) || (sink instanceof NativeAudioContext && typeof sink.sinkId === 'object');
+    if (!quiet && outputState === 'ok') { outputState = 'pending'; report(); }
+    void refreshOutput();
+  };
+  /** @type {WeakMap<HTMLMediaElement, object>} */
+  const pendingPlays = new WeakMap();
+  /** @this {HTMLMediaElement} */
+  const gatedPlay = function play() {
+    const target = /** @type {Sink} */ (/** @type {unknown} */ (this));
+    register(this);
+    if (routed(target)) return nativePlay.call(this);
+    // Start only on the selected speaker, following route changes while waiting; never on the system default.
+    const token = {};
+    pendingPlays.set(this, token);
+    return (async () => {
+      try { while (!routed(target)) await applySink(target); } catch {
+        if (pendingPlays.get(this) === token) pendingPlays.delete(this);
+        throw new DOMException('The selected speaker could not be used.', 'NotAllowedError');
+      }
+      if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
+      pendingPlays.delete(this);
+      return nativePlay.call(this);
+    })();
+  };
+  HTMLMediaElement.prototype.play = gatedPlay;
+  HTMLMediaElement.prototype.pause = function pause() { pendingPlays.delete(this); return nativePause.call(this); };
+  Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
+    ...srcObject,
+    set(value) { /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value); register(this); },
+  });
+  // A player gains audio when the page adds a remote audio track to its stream.
+  const nativeAddTrack = MediaStream.prototype.addTrack;
+  MediaStream.prototype.addTrack = function addTrack(track) {
+    nativeAddTrack.call(this, track);
+    if (track?.kind === 'audio') for (const ref of sinks) {
+      const sink = ref.deref();
+      if (sink instanceof HTMLMediaElement && srcObject.get?.call(sink) === this) register(sink);
+    }
+  };
+  if (NativeAudioContext) {
+    // New contexts render to no device until the selected speaker is applied.
+    const RoutedAudioContext = class AudioContext extends NativeAudioContext {
+      /** @param {AudioContextOptions} [options] */
+      constructor(options) {
+        const direct = route?.output === '' && outputState === 'ok';
+        super(direct ? options : /** @type {AudioContextOptions} */ ({ ...options, sinkId: { type: 'none' } }));
+        register(this);
+      }
+    };
+    Object.defineProperty(window, 'AudioContext', { value: RoutedAudioContext, writable: true, configurable: true });
+    if ('webkitAudioContext' in window) Object.defineProperty(window, 'webkitAudioContext', { value: RoutedAudioContext, writable: true, configurable: true });
+  }
+  new MutationObserver(records => {
+    for (const record of records) for (const node of record.addedNodes) {
+      if (node instanceof HTMLMediaElement) register(node);
+      else if (node instanceof Element) node.querySelectorAll('audio, video').forEach(register);
+    }
+  }).observe(document, { childList: true, subtree: true });
+  // A start that bypassed play() (autoplay, another frame's play) while the window is
+  // audible waits, paused, until it is on the selected speaker.
+  document.addEventListener('play', event => {
+    const target = event.target;
+    if (!(target instanceof HTMLMediaElement)) return;
+    const leaking = outputState === 'ok' && !target.paused && !target.muted && !routed(/** @type {Sink} */ (/** @type {unknown} */ (target)));
+    register(target);
+    if (leaking) { nativePause.call(target); void gatedPlay.call(target).catch(() => {}); }
+  }, true);
+
+  // Input: the vendor receives one stable track (and any clones). Switching devices
+  // replaces the source behind it, so its own mute (track.enabled) and sender stay intact.
+  /** @typedef {{base: MediaTrackConstraints, context: AudioContext, destination: MediaStreamAudioDestinationNode, tracks: Set<MediaStreamTrack>, stream: MediaStream | null, source: MediaStreamAudioSourceNode | null, applied: string | null | undefined, state: 'live' | 'disabled' | 'missing' | 'denied' | 'error', running: Promise<void> | null, again: boolean, stopped: boolean}} Capture */
+  /** @type {Set<Capture>} */
+  const captures = new Set();
+  /** @type {WeakMap<MediaStreamTrack, Capture>} */
+  const owners = new WeakMap();
+  /** Device streams that are open, including requests that resolved after being superseded.
+   * @type {Set<MediaStream>} */
+  const openStreams = new Set();
+  /** @type {Capture | null} */
+  let latest = null;
+  /** @param {MediaStream} stream */
+  const release = stream => { stream.getTracks().forEach(track => nativeStop.call(track)); openStreams.delete(stream); };
+  /** @param {Capture} capture */
+  const detach = capture => {
+    capture.source?.disconnect();
+    if (capture.stream) release(capture.stream);
+    capture.source = null; capture.stream = null; capture.applied = undefined;
+  };
+  const desiredInput = () => route?.inputAllowed ? route.input : null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let watchdog = null;
+  /** @param {Capture} capture */
+  const stopCapture = capture => {
+    if (capture.stopped) return;
+    capture.stopped = true;
+    detach(capture);
+    for (const track of capture.tracks) nativeStop.call(track);
+    capture.tracks.clear();
+    void capture.context.close().catch(() => {});
+    captures.delete(capture);
+    if (latest === capture) latest = [...captures].at(-1) || null;
+    if (!captures.size && watchdog) { clearInterval(watchdog); watchdog = null; }
+    report();
+  };
+  // The capture ends when the vendor has stopped every track derived from it,
+  // however it stops them (including another frame's MediaStreamTrack.prototype.stop).
+  /** @param {Capture} capture */
+  const pruneTracks = capture => {
+    for (const track of capture.tracks) if (track.readyState === 'ended') capture.tracks.delete(track);
+    if (!capture.tracks.size) stopCapture(capture);
+  };
+  MediaStreamTrack.prototype.stop = function stop() {
+    nativeStop.call(this);
+    const capture = owners.get(this);
+    if (capture) pruneTracks(capture);
+  };
+  const nativeClone = MediaStreamTrack.prototype.clone;
+  /** @param {MediaStreamTrack} track */
+  const cloneTrack = track => {
+    const copy = nativeClone.call(track);
+    const capture = owners.get(track);
+    if (capture && !capture.stopped && copy.readyState === 'live') { owners.set(copy, capture); capture.tracks.add(copy); }
+    return copy;
+  };
+  MediaStreamTrack.prototype.clone = function clone() { return cloneTrack(this); };
+  // The native stream clone copies tracks without MediaStreamTrack.prototype.clone, so clone them here.
+  const nativeGetTracks = MediaStream.prototype.getTracks;
+  MediaStream.prototype.clone = function clone() { return new NativeMediaStream(nativeGetTracks.call(this).map(cloneTrack)); };
+  /** @param {Capture} capture @param {MediaStream} stream @param {string} deviceId */
+  const attach = (capture, stream, deviceId) => {
+    const source = capture.context.createMediaStreamSource(stream);
+    source.connect(capture.destination);
+    detach(capture);
+    capture.source = source; capture.stream = stream; capture.applied = deviceId; capture.state = 'live';
+    // Unplugging ends the device track; stay silent until the same device returns.
+    stream.getAudioTracks()[0]?.addEventListener('ended', () => {
+      release(stream);
+      if (capture.stream !== stream) return;
+      detach(capture); capture.state = 'missing'; report();
+    });
+    void capture.context.resume().catch(() => {});
+  };
+  /** Disabling takes effect at once, even while a device request is still pending.
+   * @param {Capture} capture */
+  const suspend = capture => { detach(capture); capture.state = 'disabled'; };
+  /** Serialize device requests per capture; the newest route always wins.
+   * @param {Capture} capture */
+  const reconcile = capture => {
+    if (capture.running) { capture.again = true; return capture.running; }
+    const run = async () => {
+      do {
+        capture.again = false;
+        while (!capture.stopped && route) {
+          const wanted = desiredInput();
+          if (wanted === null) { suspend(capture); break; }
+          if (capture.applied === wanted && capture.stream?.getAudioTracks()[0]?.readyState === 'live') break;
+          let stream;
+          try {
+            stream = await nativeGetUserMedia.call(mediaDevices, { audio: { ...capture.base, ...(wanted ? { deviceId: { exact: wanted } } : {}) } });
+            openStreams.add(stream);
+          } catch (error) {
+            const name = error instanceof DOMException ? error.name : '';
+            if (desiredInput() !== wanted) continue;
+            // Never keep sending from the previous device when the selected one fails.
+            detach(capture);
+            capture.state = ['NotFoundError', 'OverconstrainedError', 'NotReadableError'].includes(name) ? 'missing' : ['NotAllowedError', 'SecurityError'].includes(name) ? 'denied' : 'error';
+            break;
+          }
+          // A request superseded while pending must not stay open.
+          if (capture.stopped || desiredInput() !== wanted) { release(stream); continue; }
+          attach(capture, stream, wanted);
+        }
+      } while (capture.again && !capture.stopped);
+    };
+    // Clear only after the run settles; a route that arrived meanwhile runs again.
+    capture.running = run().finally(() => {
+      capture.running = null;
+      if (capture.again && !capture.stopped) void reconcile(capture);
+      else report();
+    });
+    return capture.running;
+  };
+  /** @param {boolean | MediaTrackConstraints} audio */
+  const createCapture = async audio => {
+    const timeout = new Promise(resolve => setTimeout(resolve, 5000));
+    await Promise.race([firstRoute, timeout]);
+    if (!route?.inputAllowed) throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError');
+    const base = audio && typeof audio === 'object' ? { ...audio } : {};
+    delete base.deviceId; delete base.groupId;
+    const context = new NativeAudioContext(/** @type {AudioContextOptions} */ ({ latencyHint: 'interactive', sinkId: { type: 'none' } }));
+    const destination = context.createMediaStreamDestination();
+    const track = destination.stream.getAudioTracks()[0];
+    /** @type {Capture} */
+    const capture = { base, context, destination, tracks: new Set([track]), stream: null, source: null, applied: undefined, state: 'disabled', running: null, again: false, stopped: false };
+    owners.set(track, capture);
+    captures.add(capture); latest = capture;
+    watchdog ||= setInterval(() => { for (const item of captures) pruneTracks(item); }, 1000);
+    await reconcile(capture);
+    if (capture.state === 'denied' || capture.state === 'error') {
+      const state = capture.state;
+      stopCapture(capture);
+      throw new DOMException(state === 'denied' ? 'Microphone permission was denied.' : 'The microphone could not be started.', state === 'denied' ? 'NotAllowedError' : 'NotReadableError');
+    }
+    return new NativeMediaStream([track]);
+  };
+  MediaDevices.prototype.getUserMedia = function getUserMedia(constraints) {
+    // Camera and combined requests keep the native path, which the app denies.
+    if (this !== mediaDevices || !constraints || typeof constraints !== 'object' || !constraints.audio || constraints.video) return nativeGetUserMedia.call(this, constraints);
+    return createCapture(constraints.audio);
+  };
+
+  let lastStatus = '';
+  function report() {
+    if (!route) return;
+    /** @type {import('./audio.cjs').AudioStatus} */
+    const status = { input: latest?.state || 'idle', inputDevice: latest?.applied ?? null, openInputs: openStreams.size, generation: route.generation, output: route.output, outputState };
+    const key = JSON.stringify(status);
+    if (key !== lastStatus) { lastStatus = key; bridge.status(status); }
+  }
+  const reportDevices = async () => {
+    try {
+      const list = await nativeEnumerate.call(mediaDevices);
+      bridge.devices(list.filter(device => (device.kind === 'audioinput' || device.kind === 'audiooutput') && device.deviceId && device.deviceId !== 'default' && device.deviceId !== 'communications')
+        .map(device => ({ kind: device.kind, deviceId: device.deviceId, label: device.label })));
+    } catch {}
+  };
+  mediaDevices.addEventListener('devicechange', () => {
+    void reportDevices();
+    void refreshOutput();
+    for (const capture of captures) if (capture.state !== 'live' && capture.state !== 'disabled') void reconcile(capture);
+  });
+  bridge.subscribe(next => {
+    if (!Number.isInteger(next.generation) || (route && next.generation <= route.generation)) return;
+    const previous = route;
+    route = { inputAllowed: next.inputAllowed === true, input: typeof next.input === 'string' ? next.input : null, output: typeof next.output === 'string' ? next.output : '', generation: next.generation };
+    routeArrived();
+    // A different speaker is unconfirmed until applied; the same confirmed speaker stays valid.
+    if (!previous || previous.output !== route.output || outputState !== 'ok') { outputState = 'pending'; void refreshOutput(); }
+    for (const capture of captures) {
+      if (desiredInput() === null) suspend(capture);
+      void reconcile(capture);
+    }
+    // Microphone names are only exposed while a microphone is enabled for this connection.
+    if (!previous || previous.inputAllowed !== route.inputAllowed) void reportDevices();
+    report();
+  }, () => { void reportDevices(); });
+}
+
+/** @type {((route: unknown) => void) | null} */
+let audioRouteListener = null;
+/** @type {(() => void) | null} */
+let audioRefreshListener = null;
+try {
+  contextBridge.executeInMainWorld({
+    func: installAudioRouting,
+    args: [{
+      subscribe: (/** @type {(route: unknown) => void} */ onRoute, /** @type {() => void} */ onRefresh) => { audioRouteListener = onRoute; audioRefreshListener = onRefresh; },
+      devices: (/** @type {unknown} */ list) => ipcRenderer.send('glkvm:audio-devices', list),
+      status: (/** @type {unknown} */ status) => ipcRenderer.send('glkvm:audio-status', status),
+    }],
+  });
+  ipcRenderer.on('glkvm:audio-route', (_event, route) => audioRouteListener?.(route));
+  ipcRenderer.on('glkvm:audio-refresh', () => audioRefreshListener?.());
+  ipcRenderer.send('glkvm:audio-ready');
+} catch {
+  // Without the adapter, the main process keeps this window muted.
+}

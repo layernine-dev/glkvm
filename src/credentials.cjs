@@ -1,4 +1,5 @@
 const { validateConfig } = require('./config.cjs');
+const { defaultAudio, resetAudioDevices } = require('./audio.cjs');
 /** @typedef {import('./config.cjs').Config} Config */
 /** @typedef {import('./config.cjs').Device} Device */
 /** @typedef {{isAsyncEncryptionAvailable(): Promise<boolean>, encryptStringAsync(value: string): Promise<Buffer>, decryptStringAsync(value: Buffer): Promise<{result: string}>}} Storage */
@@ -16,6 +17,8 @@ async function prepareConfig(value, previous, storage) {
     // Never accept ciphertext supplied by a renderer, or reuse it on another host.
     delete device.encryptedPassword;
     const old = previous.devices.find(item => item.id === device.id && item.origin === device.origin);
+    // Audio device IDs are scoped to the old address and cannot carry over.
+    if (!old && previous.devices.some(item => item.id === device.id)) device.audio = resetAudioDevices(device.audio || defaultAudio());
     const change = input.devices[index];
     if (change.password !== undefined && (typeof change.password !== 'string' || change.password.length > 4096)) throw new Error('Password must be at most 4096 characters.');
     if (typeof change.password === 'string' && change.password.length) {

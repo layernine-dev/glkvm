@@ -1,6 +1,7 @@
 /* global settings */
 let config;
 let dirty = false;
+let audio = {};
 const list = document.querySelector('#device-list');
 const status = document.querySelector('#save-status');
 function message(text, error = false) {
@@ -20,7 +21,7 @@ function render() {
   config.devices.forEach((device, index) => {
     const row = document.createElement('div');
     row.className = 'device';
-    row.innerHTML = `<div class="device-fields"><label for="name-${index}">Name</label><input id="name-${index}" type="text" maxlength="60" required autocomplete="off"><label for="address-${index}">Address</label><input id="address-${index}" type="url" required placeholder="https://device.example" autocomplete="off" spellcheck="false"><label for="password-${index}">Password</label><input id="password-${index}" type="password" autocomplete="new-password" maxlength="4096"><span></span><button type="button" class="forget">Forget saved password</button><label for="mode-${index}">Start mode</label><select id="mode-${index}" class="start-mode"><option value="window-decoration-less">Window-decoration-less</option><option value="options-enabled">Options-enabled</option></select><label for="scale-${index}">Window resolution</label><select id="scale-${index}" class="window-scale"><option value="">Automatic</option>${[0.25, 0.5, 0.75, 1, 1.5, 2].map(scale => `<option value="${scale}">${scale}×</option>`).join('')}</select></div><div class="device-bottom"><label class="check"><input type="checkbox"> Open at startup</label><div class="device-actions"><button type="button" class="open">Open</button><button type="button" class="remove">Remove</button></div></div>`;
+    row.innerHTML = `<div class="device-fields"><label for="name-${index}">Name</label><input id="name-${index}" type="text" maxlength="60" required autocomplete="off"><label for="address-${index}">Address</label><input id="address-${index}" type="url" required placeholder="https://device.example" autocomplete="off" spellcheck="false"><label for="password-${index}">Password</label><input id="password-${index}" type="password" autocomplete="new-password" maxlength="4096"><span></span><button type="button" class="forget">Forget saved password</button><label for="mode-${index}">Start mode</label><select id="mode-${index}" class="start-mode"><option value="window-decoration-less">Window-decoration-less</option><option value="options-enabled">Options-enabled</option></select><label for="scale-${index}">Window resolution</label><select id="scale-${index}" class="window-scale"><option value="">Automatic</option>${[0.25, 0.5, 0.75, 1, 1.5, 2].map(scale => `<option value="${scale}">${scale}×</option>`).join('')}</select></div><div class="audio" role="group" aria-label="Audio"></div><div class="device-bottom"><label class="check"><input type="checkbox"> Open at startup</label><div class="device-actions"><button type="button" class="open">Open</button><button type="button" class="remove">Remove</button></div></div>`;
     const name = row.querySelector('input[type=text]');
     const address = row.querySelector('input[type=url]');
     const password = row.querySelector('input[type=password]');
@@ -46,6 +47,7 @@ function render() {
     row.querySelector('.remove').addEventListener('click', () => {
       config.devices.splice(index, 1); render(); changed();
     });
+    renderAudio(row.querySelector('.audio'), device);
     row.querySelector('.open').addEventListener('click', async () => {
       if (dirty || !device.id) { message('Save your changes before opening a connection.'); return; }
       try { await settings.open(device.id); } catch (error) { message(error.message, true); }
@@ -64,7 +66,7 @@ for (const section of ['connections', 'controls', 'keyboard']) {
   });
 }
 document.querySelector('#add-device').addEventListener('click', () => {
-  config.devices.push({ id: '', name: '', origin: '', openAtStartup: true });
+  config.devices.push({ id: '', name: '', origin: '', openAtStartup: true, audio: defaultAudio() });
   render(); changed();
   list.lastElementChild.querySelector('input').focus();
 });
@@ -82,11 +84,14 @@ document.querySelector('#settings-form').addEventListener('submit', async (event
 });
 document.querySelector('#control-enabled').addEventListener('change', changed);
 document.querySelector('#muted').addEventListener('change', changed);
-settings.load().then(value => {
+settings.load().then(async value => {
   config = value;
   document.querySelector('#control-enabled').checked = config.controlEnabled;
   document.querySelector('#muted').checked = config.muted;
   render();
+  settings.onAudio(snapshot => { audio = snapshot; refreshAudio(); });
+  audio = await settings.audio();
+  refreshAudio();
 }).catch(error => { message(error.message, true); document.querySelector('#save').disabled = true; });
 
 function renderKeyboard() {
@@ -118,3 +123,70 @@ function renderKeyboard() {
   document.querySelector('#paste-keymap').value = config.keyboard.keymap;
 }
 document.querySelector('#paste-keymap').addEventListener('change', event => { config.keyboard.keymap = event.target.value; changed(); });
+
+// Audio devices come from the connection's own open window: their IDs are only
+// valid for that connection's address and session.
+function defaultAudio() {
+  return { foreground: { input: 'disabled', output: 'default' }, background: { input: 'disabled', output: 'default' } };
+}
+const audioProfiles = [['foreground', 'focused'], ['background', 'in background']];
+function choiceValue(choice) { return typeof choice === 'object' ? `device:${choice.deviceId}` : choice; }
+function refreshAudio() {
+  config.devices.forEach((device, index) => {
+    const container = list.children[index]?.querySelector('.audio');
+    if (container && !container.contains(document.activeElement)) renderAudio(container, device);
+  });
+}
+function renderAudio(container, device) {
+  device.audio ||= defaultAudio();
+  const live = device.id ? audio[device.id] : undefined;
+  container.replaceChildren();
+  const heading = document.createElement('span'); heading.className = 'audio-title'; heading.textContent = 'Audio';
+  const focused = document.createElement('span'); focused.className = 'audio-column'; focused.textContent = 'Focused window';
+  const background = document.createElement('span'); background.className = 'audio-column'; background.textContent = 'In background';
+  container.append(heading, focused, background);
+  for (const [kind, title, available] of [['input', 'Microphone', live?.devices?.inputs], ['output', 'Speaker', live?.devices?.outputs]]) {
+    const label = document.createElement('span'); label.className = 'audio-label'; label.textContent = title;
+    container.append(label);
+    for (const [profile, description] of audioProfiles) {
+      const select = document.createElement('select');
+      select.className = `audio-${profile}-${kind}`;
+      select.setAttribute('aria-label', `${title} ${description} for ${device.name || 'this connection'}`);
+      const options = [...(kind === 'input' ? [['disabled', 'Microphone disabled']] : []), ['default', 'System default']];
+      for (const item of available || []) options.push([`device:${item.deviceId}`, item.label || `${title} ${options.length - (kind === 'input' ? 1 : 0)}`]);
+      const choice = device.audio[profile][kind];
+      if (typeof choice === 'object' && !options.some(([value]) => value === choiceValue(choice))) options.push([choiceValue(choice), `${choice.label || title} — not available`]);
+      for (const [value, text] of options) {
+        const option = document.createElement('option'); option.value = value; option.textContent = text; select.append(option);
+      }
+      select.value = choiceValue(choice);
+      select.addEventListener('change', () => {
+        const value = select.value;
+        const selected = [...(available || []), ...(typeof choice === 'object' ? [choice] : [])].find(item => `device:${item.deviceId}` === value);
+        device.audio[profile][kind] = selected ? { deviceId: selected.deviceId, label: selected.label } : value;
+        changed();
+        container.querySelector('.audio-status').textContent = audioStatus(device, live);
+      });
+      container.append(select);
+    }
+  }
+  const status = document.createElement('p'); status.className = 'audio-status'; status.setAttribute('role', 'status');
+  status.textContent = audioStatus(device, live);
+  container.append(status);
+}
+function audioStatus(device, live) {
+  if (!live) return 'Open this connection to list its microphones and speakers. Saved choices are kept.';
+  const parts = [];
+  const enabled = device.audio.foreground.input !== 'disabled' || device.audio.background.input !== 'disabled';
+  if (!live.devices) parts.push('Waiting for the connection window to list devices.');
+  else if (!live.devices.inputs.length) parts.push(enabled ? 'No microphone names are available yet; save to apply microphone access.' : 'Enable a microphone and save to list microphones.');
+  const state = live.status;
+  const profile = live.foreground ? 'focused' : 'background';
+  if (state) {
+    const input = { idle: 'Microphone not in use by the device page.', live: `Microphone sending (${profile} setting).`, disabled: `Microphone silent (${profile} setting: disabled).`, missing: 'Selected microphone unavailable — not sending audio.', denied: 'Microphone access denied. Check System Settings → Privacy & Security → Microphone.', error: 'Microphone could not be started — not sending audio.' }[state.input];
+    const output = { ok: '', pending: 'Switching speaker — muted until it is ready.', missing: 'Selected speaker unavailable — this window is muted.', error: 'Speaker could not be selected — this window is muted.' }[state.outputState];
+    parts.push(input, output);
+  }
+  if (dirty) parts.push('Save to apply changes.');
+  return parts.filter(Boolean).join(' ');
+}
