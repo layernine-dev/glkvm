@@ -197,11 +197,51 @@ server.listen(0, '127.0.0.1', async () => {
     await save(value => { value.devices[0].audio.foreground = { input: pick(mic1), output: pick(speaker1) }; });
     await waitFor(() => status(first)?.input === 'live' && status(first)?.inputDevice === mic1.deviceId, 'microphone returns');
 
-    // Global mute still applies on top of routing.
-    await save(value => { value.muted = true; });
-    await waitFor(() => first.webContents.isAudioMuted());
-    await save(value => { value.muted = false; });
-    await waitFor(() => !first.webContents.isAudioMuted());
+    // Global mute still applies on top of a confirmed speaker, and Settings says so.
+    const audioStatusText = () => run(settings, "document.querySelector('.audio-status').textContent");
+    const muteNotice = /All connections are muted\. To hear this connection, turn off Mute device audio in Controls and save, then turn on Sound on the device page\./;
+    // Like the firmware, the stream video is muted and sound plays through separate audio elements.
+    await run(first, "document.querySelector('#stream-video').muted = true");
+    const saveStatus = () => run(settings, "document.querySelector('#save-status').textContent");
+    const submitForm = async () => {
+      await run(settings, "document.querySelector('#settings-form').requestSubmit()");
+      await waitFor(async () => await saveStatus() === 'Changes saved', 'settings form saved');
+    };
+    await run(settings, "document.querySelector('#controls-tab').click(); document.querySelector('#muted').click()");
+    await submitForm();
+    await waitFor(() => first.webContents.isAudioMuted(), 'global mute');
+    assert.equal((await run(settings, 'window.settings.load()')).muted, true);
+    assert.equal(status(first)?.outputState, 'ok', 'The speaker stays confirmed while globally muted');
+    assert.deepEqual(await run(first, 'window.sinks()'), [speaker1.deviceId, speaker1.deviceId], 'Device audio elements stay on the confirmed speaker');
+    assert.equal(await run(first, "document.querySelector('#stream-video').muted"), true, 'The app leaves the page video muted');
+    await waitFor(async () => muteNotice.test(await audioStatusText()), 'global mute status');
+    assert.match(await audioStatusText(), /Microphone sending/, 'The mute notice adds to the live route status');
+    if (evidence) { await run(settings, "document.querySelector('#connections-tab').click()"); fs.writeFileSync(path.join(evidence, 'settings-audio-muted.png'), (await settings.webContents.capturePage()).toPNG()); }
+    // Choosing a speaker is not unmuting: the saved mute and the notice remain.
+    await save(value => { value.devices[0].audio.foreground.output = pick(speaker2); });
+    await waitFor(() => status(first)?.output === speaker2.deviceId && status(first)?.outputState === 'ok', 'speaker changed while muted');
+    assert.equal(first.webContents.isAudioMuted(), true, 'A speaker choice does not turn off the global mute');
+    assert.match(await audioStatusText(), muteNotice);
+    // Failures stay visible alongside the mute notice.
+    await save(value => { value.devices[0].audio.foreground.output = gone; });
+    await waitFor(async () => status(first)?.outputState === 'missing' && /Selected speaker unavailable/.test(await audioStatusText()), 'missing speaker while muted');
+    assert.match(await audioStatusText(), muteNotice);
+    await save(value => { value.devices[0].audio.foreground.output = pick(speaker1); });
+    await waitFor(() => status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok', 'speaker restored while muted');
+    assert.equal(first.webContents.isAudioMuted(), true);
+    // An unsaved switch change applies nothing until saved.
+    await run(settings, "document.querySelector('#controls-tab').click(); document.querySelector('#muted').click()");
+    assert.equal(await saveStatus(), 'Unsaved changes');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(first.webContents.isAudioMuted(), true, 'An unsaved switch change leaves the window muted');
+    // Turning the switch off and saving, as the notice directs, makes the routed speaker audible again.
+    await submitForm();
+    await waitFor(() => !first.webContents.isAudioMuted(), 'unmuted after the switch is saved');
+    assert.equal((await run(settings, 'window.settings.load()')).muted, false);
+    await waitFor(async () => !muteNotice.test(await audioStatusText()), 'mute notice cleared');
+    assert.match(await audioStatusText(), /Microphone sending/);
+    assert.deepEqual(await run(first, "[document.querySelector('#stream-video').muted, ...window.sinks()]"), [true, speaker1.deviceId, speaker1.deviceId], 'Unmuting routes the audio elements and leaves the page video muted');
+    await run(settings, "document.querySelector('#connections-tab').click()");
 
     // Permission boundaries.
     assert.equal(await run(second, "window.tryMedia({ audio: true })"), 'NotAllowedError', 'No microphone for a connection without one');
