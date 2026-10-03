@@ -77,11 +77,11 @@ document.querySelector('#add-device').addEventListener('click', () => {
 });
 document.querySelector('#settings-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  config.controlEnabled = document.querySelector('#control-enabled').checked;
-  config.muted = document.querySelector('#muted').checked;
+  // Leave the saved values in place until the save succeeds; audio status reports the saved mute.
+  const value = { ...config, controlEnabled: document.querySelector('#control-enabled').checked, muted: document.querySelector('#muted').checked };
   document.querySelector('#save').disabled = true;
   try {
-    const result = await settings.save(config);
+    const result = await settings.save(value);
     if (!result.ok) { message(result.error, true); return; }
     config = result.config; dirty = false; render(); message('Changes saved');
   } catch (error) { message(error.message, true); }
@@ -205,6 +205,8 @@ function audioStatus(device, live) {
     const output = { ok: '', pending: 'Switching speaker — muted until it is ready.', missing: 'Selected speaker unavailable — this window is muted.', error: 'Speaker could not be selected — this window is muted.' }[state.outputState];
     parts.push(input, output);
   }
+  // The device page plays sound through its own audio element, which stays silent until its Sound control is on.
+  if (config.muted) parts.push('All connections are muted. To hear this connection, turn off Mute device audio in Controls and save, then turn on Sound on the device page.');
   if (dirty) parts.push('Save to apply changes.');
   return parts.filter(Boolean).join(' ');
 }
