@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard, systemPreferences } = require('electron');
 if (process.platform === 'darwin' && !app.isPackaged) {
   console.error('Use bun start to run the signed GLKVM app. Generic Electron cannot access app credentials.');
   app.exit(1);
@@ -11,12 +11,14 @@ const { defaults, readConfig, writeConfig, partitionFor } = require('./config.cj
 const { publicConfig, prepareConfig, readPassword } = require('./credentials.cjs');
 const { fingerprint, isPinned } = require('./certificates.cjs');
 const { scales, windowSize } = require('./window-sizes.cjs');
-const { defaultAudio, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, nextRoute, routeChanged, outputRouted } = require('./audio.cjs');
+const { defaultAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, nextRoute, routeChanged, outputRouted } = require('./audio.cjs');
+const { watchCatalog, catalogPath, deviceLabels } = require('./audio-catalog.cjs');
+const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./device-ids.cjs');
 
 const { keyboardAction } = require('./keyboard.cjs');
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -136,41 +138,112 @@ function isForeground(entry) {
   const win = entry.window;
   return isViewer(entry) && !win.isDestroyed() && win.isFocused() && win.isVisible() && !win.isMinimized();
 }
+/** @type {import('./audio-catalog.cjs').NativeDevice[] | null} */
+let catalog = null;
+const catalogWatcher = watchCatalog(catalogPath(process.resourcesPath), devices => {
+  catalog = devices;
+  for (const entry of windows.values()) entry.audio.saltAttempts = 0;
+  migrateLegacyChoices();
+  syncAudio();
+});
+/** The catalog runs only while settings or a connection window is open. */
+function updateCatalog() {
+  if (settingsWindow || windows.size) catalogWatcher.start(); else catalogWatcher.stop();
+}
+/** Reads the connection session's device ID salt (see device-ids.cjs); never written or logged.
+ * @param {Electron.Session} ses */
+function sessionSalt(ses) {
+  const storage = ses.getStoragePath();
+  return storage && supportedRuntime(process.versions) ? readDeviceIdSalt(storage) : null;
+}
+/** @param {Entry} entry @returns {import('./audio.cjs').AudioRoute} */
+function currentRoute(entry) {
+  const resolution = { origin: entry.device.origin, salt: entry.audio.salt, reported: entry.audio.devices, catalog: catalog || [] };
+  return routeFor(entry.device.audio || defaultAudio(), isForeground(entry), (choice, kind) => resolveDevice(choice, kind, resolution));
+}
+/** Settings from older versions stored a page deviceId. Replace it with the native device
+ * whose hash it exactly is; otherwise keep it, unresolved. Saved with the next settings change. */
+function migrateLegacyChoices() {
+  if (!catalog) return;
+  for (const device of config.devices) {
+    const audio = device.audio;
+    const choices = audio ? [audio.foreground, audio.background].flatMap(profile => [profile.input, profile.output]) : [];
+    if (!audio || !choices.some(choice => typeof choice === 'object' && 'deviceId' in choice)) continue;
+    const salt = sessionSalt(session.fromPartition(partitionFor(device)));
+    if (!salt) continue;
+    const hashes = new Map(catalog.map(item => [browserDeviceId(device.origin, item.uid, salt), item]));
+    /** @param {import('./audio.cjs').InputChoice} choice */
+    const migrate = choice => {
+      if (typeof choice !== 'object' || !('deviceId' in choice)) return choice;
+      const match = hashes.get(choice.deviceId);
+      return match ? { uid: match.uid, label: choice.label } : choice;
+    };
+    for (const profile of [audio.foreground, audio.background]) {
+      profile.input = migrate(profile.input);
+      profile.output = /** @type {import('./audio.cjs').OutputChoice} */ (migrate(profile.output));
+    }
+  }
+}
 /** @param {'check' | 'request'} kind @param {Electron.WebContents | null} contents @param {string} permission @param {Electron.PermissionCheckHandlerHandlerDetails | Electron.MediaAccessPermissionRequest} details */
 function mediaAllowed(kind, contents, permission, details) {
   const entry = contents ? allEntries().find(item => !item.window.isDestroyed() && item.window.webContents === contents) : undefined;
   const viewer = !!entry && isViewer(entry);
-  return mediaPermission({ kind, permission, details, viewer, origin: entry?.device.origin, audio: entry?.device.audio, foreground: !!entry && isForeground(entry) });
+  return mediaPermission({ kind, permission, details, viewer, origin: entry?.device.origin, route: entry && viewer ? currentRoute(entry) : undefined });
 }
-/** Mute until the page confirms the selected output, so a missing speaker stays silent.
+/** Mute until the page confirms the selected output, so a missing or unresolved speaker stays silent.
  * @param {Entry} entry */
 function applyMute(entry) {
   if (entry.window.isDestroyed()) return;
   const routed = isViewer(entry) && outputRouted(entry.audio, entry.audio.status);
   entry.window.webContents.setAudioMuted(config.muted || !routed);
 }
+/** A new session's salt reaches its Preferences file up to 10 seconds after the page's
+ * first device request, and clearing cookies replaces it. While a choice is unresolved,
+ * re-read it a bounded number of times; the choice stays silent meanwhile.
+ * @param {Entry} entry @param {import('./audio.cjs').AudioRoute} route */
+function retrySalt(entry, route) {
+  const unresolved = route.inputMissing || route.output === null;
+  if (!unresolved || !entry.audio.devices || entry.audio.saltTimer || entry.audio.saltAttempts >= 30) return;
+  entry.audio.saltTimer = setTimeout(() => {
+    entry.audio.saltTimer = null;
+    if (entry.window.isDestroyed() || !isViewer(entry)) return;
+    entry.audio.saltAttempts++;
+    entry.audio.salt = sessionSalt(entry.window.webContents.session);
+    syncAudio();
+  }, 1000);
+}
 // Monotonic across pages, so a report from a replaced page never matches a new route.
 let audioGeneration = 0;
 function syncAudio() {
   for (const entry of windows.values()) {
     if (entry.window.isDestroyed()) continue;
-    const route = routeFor(entry.device.audio || defaultAudio(), isForeground(entry));
+    const route = currentRoute(entry);
     if (entry.audio.ready && routeChanged(entry.audio, route)) {
       Object.assign(entry.audio, nextRoute(entry.audio, route, ++audioGeneration));
       entry.window.webContents.send('glkvm:audio-route', entry.audio.route);
     }
+    if (entry.audio.ready) retrySalt(entry, route);
     applyMute(entry);
   }
   for (const entry of consoles.values()) applyMute(entry);
   sendSettingsAudio();
 }
+/** Settings lists every native device, whether or not a connection is open. */
 function audioSnapshot() {
-  /** @type {Record<string, {foreground: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null}>} */
-  const result = {};
+  /** @type {Record<string, {foreground: boolean, preparing: boolean, status: import('./audio.cjs').AudioStatus | null}>} */
+  const connections = {};
   for (const entry of windows.values()) {
-    if (!entry.window.isDestroyed()) result[entry.device.id] = { foreground: isForeground(entry), devices: entry.audio.devices, status: entry.audio.status };
+    if (entry.window.isDestroyed()) continue;
+    const route = currentRoute(entry);
+    connections[entry.device.id] = { foreground: isForeground(entry), preparing: (route.inputMissing || route.output === null) && !entry.audio.salt, status: entry.audio.status };
   }
-  return result;
+  /** @param {'input' | 'output'} kind */
+  const list = kind => {
+    const devices = (catalog || []).filter(device => device[kind]);
+    const labels = deviceLabels(devices);
+    return devices.map(device => ({ uid: device.uid, label: labels.get(device.uid) || device.name, alive: device.alive }));
+  };
+  return { catalog: catalog ? { inputs: list('input'), outputs: list('output') } : null, microphoneAccess: systemPreferences.getMediaAccessStatus('microphone'), connections };
 }
 let settingsAudioQueued = false;
 function sendSettingsAudio() {
@@ -220,11 +293,12 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null } };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
+  updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
   applyMute(entry);
-  win.on('closed', () => { collection.delete(device.id); installMenu(); syncAudio(); });
+  win.on('closed', () => { if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer); collection.delete(device.id); installMenu(); updateCatalog(); syncAudio(); });
   // Audio profiles follow native window focus and visibility, not player focus.
   if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => syncAudio());
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
@@ -302,7 +376,8 @@ function showSettings() {
   handleAppShortcuts(settingsWindow.webContents);
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWindow.webContents.on('will-navigate', event => event.preventDefault());
-  settingsWindow.on('closed', () => { settingsWindow = null; });
+  settingsWindow.on('closed', () => { settingsWindow = null; updateCatalog(); });
+  updateCatalog();
   settingsWindow.on('focus', installMenu);
   settingsWindow.once('ready-to-show', () => settingsWindow?.show());
   void settingsWindow.loadURL(settingsURL);
@@ -368,7 +443,7 @@ function installMenu() {
 function requireSettingsSender(event) {
   if (!settingsWindow || event.sender !== settingsWindow.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== settingsURL) throw new Error('Settings access denied.');
 }
-ipcMain.handle('glkvm:settings-load', event => { requireSettingsSender(event); return publicConfig(config); });
+ipcMain.handle('glkvm:settings-load', event => { requireSettingsSender(event); migrateLegacyChoices(); return publicConfig(config); });
 let savingSettings = false;
 ipcMain.handle('glkvm:settings-save', async (event, value) => {
   requireSettingsSender(event);
@@ -393,8 +468,10 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
       }
     }
     for (const entry of windows.values()) {
+      entry.audio.saltAttempts = 0;
       if (entry.needsLogin && entry.device.encryptedPassword) showDevice(entry.device, true, true);
     }
+    migrateLegacyChoices();
     installMenu();
     updateModeShortcuts();
     syncAudio();
@@ -438,7 +515,8 @@ ipcMain.on('glkvm:window-action', (event, action) => {
 ipcMain.on('glkvm:audio-ready', event => {
   const entry = deviceSender(event);
   if (!entry || !isViewer(entry)) return;
-  entry.audio = { ready: true, route: null, outputGeneration: 0, devices: null, status: null };
+  if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer);
+  entry.audio = { ready: true, route: null, outputGeneration: 0, devices: null, status: null, salt: null, saltAttempts: 0, saltTimer: null };
   syncAudio();
 });
 ipcMain.on('glkvm:audio-devices', (event, list) => {
@@ -446,7 +524,10 @@ ipcMain.on('glkvm:audio-devices', (event, list) => {
   const devices = validateDeviceReport(list);
   if (!entry || !isViewer(entry) || !entry.audio.ready || !devices) return;
   entry.audio.devices = devices;
-  sendSettingsAudio();
+  // The page's device request created the session's salt if it was new.
+  entry.audio.salt = sessionSalt(entry.window.webContents.session);
+  entry.audio.saltAttempts = 0;
+  syncAudio();
 });
 ipcMain.on('glkvm:audio-status', (event, value) => {
   const entry = deviceSender(event);
@@ -536,7 +617,7 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
-app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
+app.on('will-quit', () => { catalogWatcher.stop(); if (app.isReady()) globalShortcut.unregisterAll(); });
 
 app.on('certificate-error', (event, contents, url, error, certificate, callback) => {
   const entry = allEntries().find(({ window, device }) => window.webContents === contents && isDeviceURL(url, device));

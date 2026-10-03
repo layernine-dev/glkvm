@@ -2,6 +2,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { resolveSigningIdentity } = require('./signing-identity.cjs');
+const catalogName = 'glkvm-audio-catalog';
 
 /** @param {string[]} args */
 function codesign(args) {
@@ -37,10 +38,17 @@ function verifySignature(appPath, signingIdentity) {
       throw new Error(`The code identity is not stable across updates: ${bundle}`);
     }
   }
-  console.log(`Verified signed app and ${helpers.length} helpers: ${signingIdentity}`);
+  // The device catalog only reads CoreAudio properties: no entitlements.
+  const catalog = path.join(appPath, 'Contents/Resources', catalogName);
+  const details = codesign(['--display', '--verbose=4', catalog]);
+  const entitlements = codesign(['--display', '--entitlements', '-', '--xml', catalog]);
+  if (!details.includes(`Authority=${signingIdentity}\n`) || !/^Identifier=dev\.layernine\.glkvm-clean\.audio-catalog$/m.test(details) || !/^CodeDirectory .*flags=.*\bruntime\b/m.test(details) || /<key>/.test(entitlements)) {
+    throw new Error(`Unexpected signature for the audio device catalog: ${catalog}`);
+  }
+  console.log(`Verified signed app, ${helpers.length} helpers and the audio device catalog: ${signingIdentity}`);
 }
 
-module.exports = { verifySignature };
+module.exports = { verifySignature, catalogName };
 if (require.main === module) {
   const appPath = process.argv[2];
   if (!appPath) { console.error('Usage: node scripts/verify-signature.cjs /path/to/GLKVM\\ Clean.app'); process.exitCode = 1; }

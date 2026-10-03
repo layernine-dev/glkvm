@@ -419,15 +419,18 @@ function installAudioRouting(bridge) {
   /** @type {WeakMap<Sink, {id: string, promise: Promise<void>}>} */
   const pendingSinks = new WeakMap();
   /** @param {Sink} target */
-  const sinkMatches = target => !pendingSinks.has(target) && target.sinkId === (route?.output ?? '');
+  const sinkMatches = target => typeof route?.output === 'string' && !pendingSinks.has(target) && target.sinkId === route.output;
   /** Overlapping setSinkId calls abort each other, so share one per element and device.
+   * Fails closed: without a resolved speaker nothing is applied, not even the system default.
    * @param {Sink} target */
   const applySink = target => {
-    const wanted = route?.output ?? '';
+    const wanted = route?.output;
+    if (typeof wanted !== 'string') return Promise.reject(new DOMException('No speaker is selected.', 'NotFoundError'));
     const pending = pendingSinks.get(target);
     if (pending?.id === wanted) return pending.promise;
     if (!pending && target.sinkId === wanted) return Promise.resolve();
-    const promise = (pending ? pending.promise.catch(() => {}) : Promise.resolve()).then(() => target.setSinkId(wanted))
+    // A queued change whose speaker was replaced meanwhile is skipped; callers check the route again.
+    const promise = (pending ? pending.promise.catch(() => {}) : Promise.resolve()).then(() => route?.output === wanted ? target.setSinkId(wanted) : undefined)
       .finally(() => { if (pendingSinks.get(target)?.promise === promise) pendingSinks.delete(target); });
     pendingSinks.set(target, { id: wanted, promise });
     return promise;
@@ -440,9 +443,12 @@ function installAudioRouting(bridge) {
     const source = srcObject.get?.call(target);
     return source instanceof NativeMediaStream && !source.getAudioTracks().length;
   };
-  /** Nothing to apply: no route yet or a missing speaker (both keep the window muted), or already routed.
+  /** An unresolved speaker (null) is never applied, not even as the system default.
+   * The main process keeps the window muted while it is unresolved. */
+  const unresolved = () => route?.output === null;
+  /** Nothing to apply: no route yet or a missing or unresolved speaker (all keep the window muted), or already routed.
    * @param {Sink} target */
-  const routed = target => !route || outputState === 'missing' || silent(target) || sinkMatches(target);
+  const routed = target => !route || outputState === 'missing' || unresolved() || silent(target) || sinkMatches(target);
   const refreshOutput = async () => {
     if (!route) return;
     const version = ++outputVersion;
@@ -450,8 +456,11 @@ function installAudioRouting(bridge) {
     /** @type {'ok' | 'missing' | 'error'} */
     let state = 'ok';
     try {
-      // Never fall back: a missing device stays missing and the window stays muted.
-      if (wanted && !(await nativeEnumerate.call(mediaDevices)).some(device => device.kind === 'audiooutput' && device.deviceId === wanted)) state = 'missing';
+      // Never fall back: a missing or unresolved device stays missing and the window stays muted.
+      if (wanted === null) state = 'missing';
+      else if (wanted && !(await nativeEnumerate.call(mediaDevices)).some(device => device.kind === 'audiooutput' && device.deviceId === wanted)) state = 'missing';
+      // The route may have changed while devices were listed; the newer refresh owns it.
+      else if (version !== outputVersion || route?.output !== wanted) return;
       else {
         for (const ref of sinks) if (!ref.deref()) sinks.delete(ref);
         const targets = [...sinks].map(ref => ref.deref()).filter(sink => sink !== undefined);
@@ -469,7 +478,7 @@ function installAudioRouting(bridge) {
     if (!target) return;
     const sink = /** @type {Sink} */ (target);
     if (!knownSinks.has(sink)) { knownSinks.add(sink); sinks.add(new WeakRef(sink)); }
-    if (!route || outputState === 'missing' || sinkMatches(sink)) return;
+    if (!route || outputState === 'missing' || unresolved() || sinkMatches(sink)) return;
     const quiet = silent(sink) || (sink instanceof NativeAudioContext && typeof sink.sinkId === 'object');
     if (!quiet && outputState === 'ok') { outputState = 'pending'; report(); }
     void refreshOutput();
@@ -558,7 +567,8 @@ function installAudioRouting(bridge) {
     if (capture.stream) release(capture.stream);
     capture.source = null; capture.stream = null; capture.applied = undefined;
   };
-  const desiredInput = () => route?.inputAllowed ? route.input : null;
+  // An unresolved microphone wants no device, so a pending request for any device is superseded.
+  const desiredInput = () => route?.inputAllowed && !route.inputMissing ? route.input : null;
   /** @type {ReturnType<typeof setInterval> | null} */
   let watchdog = null;
   /** @param {Capture} capture */
@@ -623,6 +633,8 @@ function installAudioRouting(bridge) {
       do {
         capture.again = false;
         while (!capture.stopped && route) {
+          // An enabled microphone that cannot be resolved stays silent; nothing is opened.
+          if (route.inputAllowed && route.inputMissing) { detach(capture); capture.state = 'missing'; break; }
           const wanted = desiredInput();
           if (wanted === null) { suspend(capture); break; }
           if (capture.applied === wanted && capture.stream?.getAudioTracks()[0]?.readyState === 'live') break;
@@ -704,16 +716,19 @@ function installAudioRouting(bridge) {
   bridge.subscribe(next => {
     if (!Number.isInteger(next.generation) || (route && next.generation <= route.generation)) return;
     const previous = route;
-    route = { inputAllowed: next.inputAllowed === true, input: typeof next.input === 'string' ? next.input : null, output: typeof next.output === 'string' ? next.output : '', generation: next.generation };
+    route = { inputAllowed: next.inputAllowed === true, input: typeof next.input === 'string' ? next.input : null, inputMissing: next.inputMissing === true, output: typeof next.output === 'string' ? next.output : null, generation: next.generation };
+    const current = route;
     routeArrived();
     // A different speaker is unconfirmed until applied; the same confirmed speaker stays valid.
     if (!previous || previous.output !== route.output || outputState !== 'ok') { outputState = 'pending'; void refreshOutput(); }
     for (const capture of captures) {
-      if (desiredInput() === null) suspend(capture);
+      // Disabled or unresolved takes effect at once, even while a device request is pending.
+      if (current.inputAllowed && current.inputMissing) { detach(capture); capture.state = 'missing'; }
+      else if (desiredInput() === null) suspend(capture);
       void reconcile(capture);
     }
-    // Microphone names are only exposed while a microphone is enabled for this connection.
-    if (!previous || previous.inputAllowed !== route.inputAllowed) void reportDevices();
+    // Microphone IDs are only exposed while a microphone is enabled for this connection.
+    if (!previous || previous.inputAllowed !== current.inputAllowed) void reportDevices();
     report();
   }, () => { void reportDevices(); });
 }
