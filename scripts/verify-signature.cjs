@@ -1,9 +1,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-
-// Keep this identity and the bundle identifiers stable across local updates.
-const signingIdentity = 'Apple Development: Uwe Schwarz (54988A349V)';
+const { resolveSigningIdentity } = require('./signing-identity.cjs');
 
 /** @param {string[]} args */
 function codesign(args) {
@@ -13,8 +11,8 @@ function codesign(args) {
   return result.stdout + result.stderr;
 }
 
-/** @param {string} appPath */
-function verifySignature(appPath) {
+/** @param {string} appPath @param {string} signingIdentity */
+function verifySignature(appPath, signingIdentity) {
   codesign(['--verify', '--deep', '--strict', '--verbose=2', appPath]);
   const frameworks = path.join(appPath, 'Contents/Frameworks');
   const helpers = fs.readdirSync(frameworks).filter(name => name.endsWith('.app'));
@@ -42,12 +40,12 @@ function verifySignature(appPath) {
   console.log(`Verified signed app and ${helpers.length} helpers: ${signingIdentity}`);
 }
 
-module.exports = { signingIdentity, verifySignature };
+module.exports = { verifySignature };
 if (require.main === module) {
   const appPath = process.argv[2];
   if (!appPath) { console.error('Usage: node scripts/verify-signature.cjs /path/to/GLKVM\\ Clean.app'); process.exitCode = 1; }
   else {
-    try { verifySignature(path.resolve(appPath)); }
+    try { verifySignature(path.resolve(appPath), resolveSigningIdentity()); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "glkvm-clean",
   "productName": "GLKVM Clean",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "Frameless GLKVM control and screen sharing with configurable connections.",
   "main": "src/main.cjs",
@@ -18,8 +18,8 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "@types/node": "^26.6.3",
-    "electron": "^44.4.5",
+    "@types/node": "^26.6.4",
+    "electron": "^44.5.1",
     "typescript": "^7.0.2"
   },
   "trustedDependencies": [
