@@ -17,7 +17,9 @@ app.setPath('userData', directory);
 // Mirrors the firmware's Pinia stores (see /tmp/glkvm-startup-audio/evidence.md): kvm.configState.volumeOn
 // and setVolumeOn, audioMic.state.micMuted and setMicMuted, usbManagement.enableMic and initLoading.
 // Unmuting starts the microphone like the firmware's audio session; a failure re-mutes it.
-// Nothing is played. Options come from localStorage 'fixture-firmware' and apply on load.
+// Nothing is played. Options come from localStorage 'fixture-firmware' and apply on load:
+// answerError (the audio answer fails before any microphone request, then re-mutes), answerHang
+// (no microphone request at all), micDelay (ms before the request), keepOnFailure (no re-mute).
 const firmwareScript = `<div id="app"></div><script>
 (() => {
   const options = JSON.parse(localStorage.getItem('fixture-firmware') || '{}');
@@ -38,7 +40,13 @@ const firmwareScript = `<div id="app"></div><script>
       audioMic.state.micMuted = muted;
       if (muted) { window.stopMic(); return; }
       if (!usb.enableMic || kvm.isDirectMode) return;
-      window.startMic().catch(() => { window.micErrors++; audioMic.state.micMuted = true; });
+      if (options.answerError) { setTimeout(() => { window.micErrors++; audioMic.state.micMuted = true; }, 300); return; }
+      if (options.answerHang) return;
+      const start = () => {
+        if (audioMic.state.micMuted) return;
+        window.startMic().catch(() => { window.micErrors++; if (!options.keepOnFailure) audioMic.state.micMuted = true; });
+      };
+      if (options.micDelay) setTimeout(start, options.micDelay); else start();
     } };
   window.firmware = { kvm, audioMic, usb };
   window.manual = action => { window.manualCall = true; try { action(window.firmware); } finally { window.manualCall = false; } };
@@ -62,10 +70,15 @@ const firmwareScript = `<div id="app"></div><script>
   if (!options.manualStores) window.mountStores();
 })();
 </script></body>`;
-const server = createServer((_req, res) => {
+/** @param {boolean} signedIn */
+const page = signedIn => createServer((_req, res) => {
   res.setHeader('content-type', 'text/html');
-  res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replace('</body>', firmwareScript));
+  const html = fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8');
+  res.end((signedIn ? html.replace('<script>', '<script>localStorage.setItem("fixture-auth", "true");') : html).replace('</body>', firmwareScript));
 });
+const server = page(false);
+// Serves an already signed-in page for a connection opened later with a fresh session.
+const signedInServer = page(true);
 /** @param {() => unknown | Promise<unknown>} condition @param {string} [label] @param {number} [tries] */
 async function waitFor(condition, label = 'application state', tries = 150) {
   for (let i = 0; i < tries; i++) {
@@ -84,14 +97,23 @@ const startups = new Map();
 const reports = new Map();
 /** Window titles that received the private startup setting or reported a startup status. @type {string[]} */
 const startupPeers = [];
+/** Routes sent to each page. @type {Map<number, import('../src/audio.cjs').SentRoute[]>} */
+const routes = new Map();
+/** Every startup report, with whether the page's latest route still had an unresolved microphone.
+ * @type {[number, import('../src/audio.cjs').StartupStatus, boolean][]} */
+const startupLog = [];
 const titleOf = (/** @type {Electron.WebContents} */ contents) => BrowserWindow.fromWebContents(contents)?.getTitle() || '';
 ipcMain.on('glkvm:audio-status', (event, status) => statuses.set(event.sender.id, status));
 ipcMain.on('glkvm:audio-devices', (event, list) => reports.set(event.sender.id, list));
-ipcMain.on('glkvm:audio-startup-status', (event, status) => { startups.set(event.sender.id, status); startupPeers.push(titleOf(event.sender)); });
+ipcMain.on('glkvm:audio-startup-status', (event, status) => {
+  startups.set(event.sender.id, status); startupPeers.push(titleOf(event.sender));
+  startupLog.push([event.sender.id, status, routes.get(event.sender.id)?.at(-1)?.inputMissing === true]);
+});
 app.on('web-contents-created', (_event, contents) => {
   const send = contents.send;
   contents.send = (channel, ...args) => {
     if (channel === 'glkvm:audio-startup') startupPeers.push(titleOf(contents));
+    if (channel === 'glkvm:audio-route') routes.set(contents.id, [...(routes.get(contents.id) || []), args[0]]);
     return send.call(contents, channel, ...args);
   };
 });
@@ -99,18 +121,27 @@ app.on('web-contents-created', (_event, contents) => {
 server.listen(0, '127.0.0.1', async () => {
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
+  await new Promise(resolve => signedInServer.listen(0, '127.0.0.1', () => resolve(undefined)));
+  const signedInAddress = signedInServer.address();
+  assert.ok(signedInAddress && typeof signedInAddress !== 'string');
+  const thirdOrigin = `http://127.0.0.1:${signedInAddress.port}`;
+  /** @type {{foreground: import('../src/audio.cjs').AudioProfile, background: import('../src/audio.cjs').AudioProfile}} */
   const microphoneProfiles = { foreground: { input: 'default', output: 'default' }, background: { input: 'default', output: 'default' } };
+  /** @type {import('../src/audio.cjs').AudioProfile} */
+  const savedMicrophone = { input: { uid: 'fake_audio_input_1', label: 'Fake Audio Input 1' }, output: 'default' };
   const config = defaults();
   // Globally muted throughout: nothing is audible even when device sound turns on.
   config.muted = true;
   config.devices = [
     { id: 'first', name: 'First', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true, audio: { ...microphoneProfiles, startup: { speaker: false, microphone: false } } },
     { id: 'second', name: 'Second', origin: `http://localhost:${address.port}`, openAtStartup: true, audio: { ...microphoneProfiles, startup: { speaker: false, microphone: false } } },
+    // Opened later: a saved microphone by native UID in a session whose device ID salt is new.
+    { id: 'third', name: 'Third', origin: thirdOrigin, openAtStartup: false, audio: { foreground: savedMicrophone, background: savedMicrophone, startup: { speaker: true, microphone: true } } },
   ];
   fakeCatalog.setDevices(fakeCatalog.fakeDevices());
   await app.whenReady();
   // Both connections sign in through the hidden login helper with the fixture password.
-  const stored = await prepareConfig({ ...config, devices: config.devices.map(device => ({ ...device, password: 'fixture-secret' })) }, config, safeStorage);
+  const stored = await prepareConfig({ ...config, devices: config.devices.map(device => ({ ...device, password: device.id === 'third' ? '' : 'fixture-secret' })) }, config, safeStorage);
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(stored));
   require('../src/main.cjs');
   try {
@@ -169,7 +200,7 @@ server.listen(0, '127.0.0.1', async () => {
     // The switches are saved through the Settings form.
     await run(settings, "document.querySelectorAll('.audio-startup-speaker')[0].click(); document.querySelector('#settings-form').requestSubmit()");
     await waitFor(async () => (await run(settings, "document.querySelector('#save-status').textContent")) === 'Changes saved', 'switch saved');
-    assert.deepEqual((await run(settings, 'window.settings.load()')).devices.map((/** @type {any} */ device) => device.audio.startup), [{ speaker: true, microphone: false }, { speaker: false, microphone: false }]);
+    assert.deepEqual((await run(settings, 'window.settings.load()')).devices.map((/** @type {any} */ device) => device.audio.startup), [{ speaker: true, microphone: false }, { speaker: false, microphone: false }, { speaker: true, microphone: true }]);
 
     // Round 1: (sound on, microphone off) and (sound off, microphone on). Saving changes nothing now.
     await setStartup({ speaker: true, microphone: false }, { speaker: false, microphone: true });
@@ -257,8 +288,12 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual((await firmware(second)).calls, []);
     for (const input of ['disabled', { uid: 'AppleUSBAudioEngine:Unplugged:1', label: 'Unplugged' }]) {
       await save(value => { value.devices[1].audio.foreground.input = input; value.devices[1].audio.background.input = input; });
+      const begun = Date.now();
       await reload(second);
-      await waitFor(() => settled(second), `profile ${JSON.stringify(input)}`);
+      // A disabled profile is reported at once; a missing device after the bounded wait for its mapping.
+      await waitFor(() => settled(second), `profile ${JSON.stringify(input)}`, 300);
+      if (input === 'disabled') assert.ok(Date.now() - begun < 10000, 'A disabled microphone is not awaited');
+      else assert.ok(Date.now() - begun < 28000, `A missing microphone is reported within the bound: ${Date.now() - begun} ms`);
       assert.equal(startup(second)?.microphoneState, 'unavailable');
       assert.deepEqual([(await firmware(second)).calls, statuses.get(second.webContents.id)?.openInputs ?? 0], [[], 0], 'No capture');
     }
@@ -273,6 +308,52 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => settled(second), 'direct mode');
     assert.deepEqual(startup(second), { speaker: true, microphone: true, speakerState: 'unsupported', microphoneState: 'unsupported' });
     assert.deepEqual((await firmware(second)).calls, []);
+
+    // Address edits keep the microphone at connect for the same origin (trailing slash, letter case,
+    // reverting), turn it off for a different origin, and the saved result matches after a reload.
+    const thirdMicrophone = () => run(settings, "document.querySelectorAll('.audio-startup-microphone')[2].checked");
+    /** @param {string} value */
+    const typeAddress = value => run(settings, `(() => { const input = document.querySelector('#address-2'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('input')); })()`);
+    /** @param {string} label */
+    const submitted = async label => {
+      await run(settings, "document.querySelector('#settings-form').requestSubmit()");
+      await waitFor(async () => (await run(settings, "document.querySelector('#save-status').textContent")) === 'Changes saved', label);
+      return /** @type {{origin: string, audio: import('../src/audio.cjs').AudioSettings}} */ ((await run(settings, 'window.settings.load()')).devices[2]);
+    };
+    for (const [value, checked] of /** @type {[string, boolean][]} */ ([[`${thirdOrigin}/`, true], [thirdOrigin.replace('http:', 'HTTP:'), true], ['http://127.0.0.1:1', false], ['http://127.0.0.1:', false], [`${thirdOrigin}/`, true]])) {
+      await typeAddress(value);
+      assert.equal(await thirdMicrophone(), checked, `Microphone switch for ${value}`);
+    }
+    let thirdSaved = await submitted('same origin saved');
+    assert.deepEqual([thirdSaved.origin, thirdSaved.audio.startup], [thirdOrigin, { speaker: true, microphone: true }], 'A spelling-only change keeps the setting');
+    settings.webContents.reload();
+    await waitFor(() => !settings.webContents.isLoading() && run(settings, "document.querySelectorAll('.audio-startup-microphone').length === 3"), 'settings reloaded');
+    assert.equal(await thirdMicrophone(), true, 'Reloaded settings show the saved switch');
+    await typeAddress(`http://localhost:${signedInAddress.port}`);
+    assert.equal(await thirdMicrophone(), false);
+    thirdSaved = await submitted('new origin saved');
+    assert.deepEqual([thirdSaved.origin, thirdSaved.audio.startup, thirdSaved.audio.foreground], [`http://localhost:${signedInAddress.port}`, { speaker: true, microphone: false }, savedMicrophone], 'A different origin turns it off and keeps the device choices');
+    assert.equal(await thirdMicrophone(), false, 'The form matches the saved setting');
+    await save(value => { value.devices[2].origin = thirdOrigin; });
+    await save(value => { value.devices[2].audio.startup.microphone = true; });
+
+    // A saved microphone in a newly opened session: live video is ready before Chromium has persisted
+    // the session's device ID salt, so the microphone is unresolved at first. Startup waits for the
+    // mapping and starts the microphone once. Chromium's fake devices apply to every session (gate above).
+    await run(settings, "window.settings.open('third')");
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Third'), 'third window');
+    const third = /** @type {Electron.BrowserWindow} */ (BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Third'));
+    await waitFor(() => !third.webContents.isLoading() && live(third), 'third live video');
+    await waitFor(() => settled(third), 'third startup', 250);
+    assert.deepEqual(startup(third), { speaker: true, microphone: true, speakerState: 'applied', microphoneState: 'applied' });
+    assert.deepEqual(await autoCalls(third), [['volume', true, 'auto'], ['mic', true, 'auto']], 'The microphone started once');
+    assert.ok(startupLog.some(([id, status, missing]) => id === third.webContents.id && status.speakerState === 'applied' && status.microphoneState === 'waiting' && missing), 'Video was ready while the saved microphone was still unresolved');
+    assert.equal(routes.get(third.webContents.id)?.at(-1)?.inputMissing, false);
+    await waitFor(() => statuses.get(third.webContents.id)?.input === 'live', 'third microphone live');
+    const thirdDevices = reports.get(third.webContents.id) || [];
+    assert.ok(thirdDevices.length > 0 && thirdDevices.every(device => /^Fake /.test(device.label)), 'Only fake devices in the new session');
+    third.close();
+    await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Third'), 'third closed');
 
     // Permission denied: one attempt, ended, and not repeated for a new video session.
     // This replaces the app's permission handler for this connection, so it runs last.
@@ -289,12 +370,65 @@ server.listen(0, '127.0.0.1', async () => {
     await sleep(1500);
     assert.deepEqual([(await autoCalls(second)).length, requests, startup(second)?.microphoneState], [1, 1, 'denied'], 'No repeated prompt');
 
+    /** @param {Electron.BrowserWindow} win @param {import('../src/audio.cjs').StartupState} state @param {number} since */
+    const reportsOf = (win, state, since) => startupLog.slice(since).filter(([id, status]) => id === win.webContents.id && status.microphoneState === state).length;
+    const micOnCall = async () => (await autoCalls(second)).some(call => call[0] === 'mic' && call[1]);
+
+    // A delayed failure of an older attempt does not touch a newer video session: no re-mute, no block.
+    let since = startupLog.length;
+    await reload(second, { micDelay: 1500, keepOnFailure: true });
+    await waitFor(micOnCall, 'delayed attempt started');
+    await run(second, 'window.connect()');
+    await waitFor(() => settled(second) && startup(second)?.microphoneState === 'unchanged', 'newer session');
+    await sleep(2500);
+    let state = await firmware(second);
+    assert.deepEqual([await autoCalls(second), state.micMuted, state.micErrors], [[['mic', true, 'auto']], false, 1], 'The failure arrived after the new session and changed nothing');
+    assert.deepEqual([reportsOf(second, 'denied', since), reportsOf(second, 'error', since), startup(second)?.microphoneState], [0, 0, 'unchanged']);
+
+    // A delayed failure after manual microphone changes does not override them.
+    since = startupLog.length;
+    await reload(second, { micDelay: 1500, keepOnFailure: true });
+    await waitFor(micOnCall, 'second delayed attempt started');
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(true))');
+    await sleep(500);
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(false))');
+    await sleep(3500);
+    state = await firmware(second);
+    assert.deepEqual([await autoCalls(second), state.micMuted], [[['mic', true, 'auto']], false], 'The manual microphone stays on');
+    // A mute before any capture cannot be told apart from the firmware ending the attempt: one error report.
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since)], ['error', 1]);
+
+    // The firmware's audio answer fails before any microphone request and re-mutes: one error, no
+    // capture and no prompt, the app does not fight the controls, and a new session does not retry.
+    since = startupLog.length;
+    let before = requests;
+    await reload(second, { answerError: true });
+    await waitFor(() => settled(second), 'failed answer');
+    await sleep(1500);
+    state = await firmware(second);
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since), reportsOf(second, 'applied', since)], ['error', 1, 0], 'Reported once, never applied');
+    assert.deepEqual([await autoCalls(second), state.micMuted, state.micErrors, requests - before, statuses.get(second.webContents.id)?.openInputs], [[['mic', true, 'auto']], true, 1, 0, 0]);
+    await run(second, 'window.connect()');
+    await waitFor(async () => settled(second) && (await run(second, 'window.firmware.kvm.configState.initVideoSessionFinished')), 'new session after the failed answer');
+    await sleep(1000);
+    assert.deepEqual([(await autoCalls(second)).length, startup(second)?.microphoneState], [1, 'error'], 'Not retried');
+
+    // No microphone request at all: after the bounded wait the attempt ends once with an error.
+    since = startupLog.length;
+    before = requests;
+    await reload(second, { answerHang: true });
+    await waitFor(() => settled(second), 'attempt without a request', 250);
+    await sleep(1500);
+    state = await firmware(second);
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'applied', since)], ['error', 0]);
+    assert.deepEqual([await autoCalls(second), state.micMuted, requests - before, statuses.get(second.webContents.id)?.openInputs], [[['mic', true, 'auto'], ['mic', false, 'auto']], true, 0, 0], 'Ended once');
+
     assert.equal(first.webContents.isAudioMuted() && second.webContents.isAudioMuted(), true, 'Global mute held throughout');
-    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, bounded transport replacement, viewers only, delayed stores and USB initialization, USB microphone off, disabled and missing microphone, Direct mode, single denied attempt, global mute and routing preserved');
+    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, bounded transport replacement, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Startups:', JSON.stringify([...startups]), 'Statuses:', JSON.stringify([...statuses]));
     app.exit(1);
   }
-  finally { server.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); }
+  finally { server.close(); signedInServer.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); }
 });

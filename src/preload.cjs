@@ -559,9 +559,10 @@ function installAudioRouting(bridge) {
   const openStreams = new Set();
   /** @type {Capture | null} */
   let latest = null;
-  /** Microphone requests the page could not start, by reason; read by the startup check.
-   * @type {{denied: number, error: number}} */
-  const captureFailures = { denied: 0, error: 0 };
+  /** The automatic microphone start in progress. Captures the page requests meanwhile report
+   * to it, so an older attempt's outcome never counts for a newer one.
+   * @type {{capture: Capture | null, failed: 'denied' | 'error' | null} | null} */
+  let microphoneAttempt = null;
   /** @param {MediaStream} stream */
   const release = stream => { stream.getTracks().forEach(track => nativeStop.call(track)); openStreams.delete(stream); };
   /** @param {Capture} capture */
@@ -669,9 +670,10 @@ function installAudioRouting(bridge) {
   };
   /** @param {boolean | MediaTrackConstraints} audio */
   const createCapture = async audio => {
+    const attempt = microphoneAttempt;
     const timeout = new Promise(resolve => setTimeout(resolve, 5000));
     await Promise.race([firstRoute, timeout]);
-    if (!route?.inputAllowed) { captureFailures.denied++; throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError'); }
+    if (!route?.inputAllowed) { if (attempt) attempt.failed ||= 'denied'; throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError'); }
     const base = audio && typeof audio === 'object' ? { ...audio } : {};
     delete base.deviceId; delete base.groupId;
     const context = new NativeAudioContext(/** @type {AudioContextOptions} */ ({ latencyHint: 'interactive', sinkId: { type: 'none' } }));
@@ -681,11 +683,12 @@ function installAudioRouting(bridge) {
     const capture = { base, context, destination, tracks: new Set([track]), stream: null, source: null, applied: undefined, state: 'disabled', running: null, again: false, stopped: false };
     owners.set(track, capture);
     captures.add(capture); latest = capture;
+    if (attempt) attempt.capture = capture;
     watchdog ||= setInterval(() => { for (const item of captures) pruneTracks(item); }, 1000);
     await reconcile(capture);
     if (capture.state === 'denied' || capture.state === 'error') {
       const state = capture.state;
-      captureFailures[state]++;
+      if (attempt) attempt.failed ||= state;
       stopCapture(capture);
       throw new DOMException(state === 'denied' ? 'Microphone permission was denied.' : 'The microphone could not be started.', state === 'denied' ? 'NotAllowedError' : 'NotReadableError');
     }
@@ -755,8 +758,9 @@ function installAudioRouting(bridge) {
   /** @type {{session: object, wanted: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}, since: number} | null} */
   let pendingStartup = null;
   let startupRuns = 0;
-  // One failed microphone start per page: no repeated permission prompts or firmware dialogs.
-  let microphoneBlocked = false;
+  /** One failed microphone start per page: no repeated permission prompts or firmware dialogs.
+   * @type {'denied' | 'error' | null} */
+  let microphoneBlocked = null;
   /** @param {unknown} value @param {string} key @returns {unknown} */
   const field = (value, key) => value && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value)[key] : undefined;
   /** @param {unknown} target @param {string} name @param {boolean} value */
@@ -808,12 +812,15 @@ function installAudioRouting(bridge) {
     handledSession = session; pendingStartup = null;
     // Bounds a firmware that keeps replacing its video track.
     if (++startupRuns > 20) return;
-    void applyStartup(stores, wanted, startupRuns);
+    void applyStartup(stores, session, wanted, startupRuns);
   }
-  /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run */
-  const applyStartup = async ({ kvm, config, mic, micState, usb }, wanted, run) => {
+  const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
+  /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {object} session @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run */
+  const applyStartup = async ({ kvm, config, mic, micState, usb }, session, wanted, run) => {
     const volumeOn = () => field(config, 'volumeOn') === true;
     const micOn = () => field(micState, 'micMuted') === false;
+    // Checked after every wait, before anything is changed or reported: a newer session reports for itself.
+    const fresh = () => run === startupRuns && videoSession() === session;
     /** @param {() => boolean} current @param {boolean} value @param {(value: boolean) => void} set @returns {import('./audio.cjs').StartupState} */
     const apply = (current, value, set) => {
       if (current() === value) return 'unchanged';
@@ -827,30 +834,54 @@ function installAudioRouting(bridge) {
       return;
     }
     const speakerState = apply(volumeOn, wanted.speaker, on => invoke(kvm, 'setVolumeOn', on));
+    // A saved microphone resolves once the session's device ID salt is readable, up to about 10 s
+    // after the page's first device request. Wait for it (bounded) instead of reporting it missing.
+    if (wanted.microphone && !micOn() && route?.inputAllowed && route.inputMissing) {
+      reportStartup(wanted, speakerState, 'waiting');
+      for (let i = 0; i < 200 && !micOn() && route?.inputAllowed && route.inputMissing; i++) {
+        await sleep(100);
+        if (!fresh()) return;
+      }
+    }
     /** @type {import('./audio.cjs').StartupState} */
     let microphoneState;
     if (!wanted.microphone || micOn()) microphoneState = apply(micOn, wanted.microphone, setMicrophone);
     // Only with the device's USB microphone on and a microphone selected for the current window state.
     else if (field(usb, 'enableMic') !== true || !route?.inputAllowed || route.input === null || route.inputMissing) microphoneState = 'unavailable';
-    else if (!wanted.microphoneAccess || microphoneBlocked) microphoneState = 'denied';
+    else if (!wanted.microphoneAccess) microphoneState = 'denied';
+    else if (microphoneBlocked) microphoneState = microphoneBlocked;
     else {
-      const failures = { ...captureFailures };
-      microphoneState = apply(micOn, true, setMicrophone);
-      reportStartup(wanted, speakerState, microphoneState === 'applied' ? 'waiting' : microphoneState);
-      if (microphoneState !== 'applied') return;
-      // Wait (bounded) for the page's capture to start or fail.
-      for (let i = 0; i < 30 && latest?.state !== 'live'; i++) {
-        if (captureFailures.denied > failures.denied || captureFailures.error > failures.error) break;
-        await new Promise(resolve => setTimeout(resolve, 500));
+      const attempt = { capture: /** @type {Capture | null} */ (null), failed: /** @type {'denied' | 'error' | null} */ (null) };
+      microphoneAttempt = attempt;
+      try {
+        microphoneState = apply(micOn, true, setMicrophone);
+        if (microphoneState === 'applied') {
+          reportStartup(wanted, speakerState, 'waiting');
+          // Wait (bounded) for the page's own capture: live, failed, ended by the firmware, or never
+          // requested. A pending request, such as the macOS permission prompt, gets longer.
+          const started = Date.now();
+          /** @type {'applied' | 'denied' | 'error' | null} */
+          let outcome = null;
+          while (!outcome) {
+            await sleep(100);
+            if (!fresh()) return;
+            const capture = attempt.capture;
+            if (attempt.failed) outcome = attempt.failed;
+            else if (capture?.state === 'live' && !capture.stopped) outcome = 'applied';
+            // The firmware turned the microphone off again without a live capture (for example a failed answer).
+            else if (!micOn()) outcome = 'error';
+            else if (Date.now() - started > (capture?.running ? 60000 : 15000)) outcome = 'error';
+          }
+          if (outcome !== 'applied') {
+            microphoneBlocked = outcome;
+            // End an attempt the firmware left on; a microphone it already turned off is not touched.
+            if (micOn()) try { setMicrophone(false); } catch {}
+          }
+          microphoneState = outcome;
+        }
+      } finally {
+        if (microphoneAttempt === attempt) microphoneAttempt = null;
       }
-      if (captureFailures.denied > failures.denied || captureFailures.error > failures.error) {
-        microphoneBlocked = true;
-        microphoneState = captureFailures.denied > failures.denied ? 'denied' : 'error';
-        // End the attempt; the firmware normally does this itself after a failure.
-        if (micOn()) try { setMicrophone(false); } catch {}
-      }
-      // A newer session reports for itself.
-      if (run !== startupRuns) return;
     }
     reportStartup(wanted, speakerState, microphoneState);
   };
