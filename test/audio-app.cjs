@@ -58,8 +58,8 @@ const vendorScript = `<script>
     };
     const video = document.createElement('video'); document.body.append(video);
     video.srcObject = new MediaStream(document.querySelector('#stream-video').srcObject.getVideoTracks());
-    window.early = { attached: player(true, false), detached: player(false, false), paused: player(true, false), autoplay: player(true, true), video, results: {} };
-    for (const name of ['attached', 'detached', 'paused', 'video']) window.early[name].play().then(() => 'playing', error => error.name).then(value => { window.early.results[name] = value; });
+    window.early = { attached: player(true, false), detached: player(false, false), paused: player(true, false), becomesVideo: player(true, false), losesAudio: player(false, false), autoplay: player(true, true), video, results: {} };
+    for (const name of ['attached', 'detached', 'paused', 'becomesVideo', 'losesAudio', 'video']) window.early[name].play().then(() => 'playing', error => error.name).then(value => { window.early.results[name] = value; });
     window.early.paused.pause();
   }
 </script></body>`;
@@ -596,6 +596,8 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(contents.isAudioMuted(), true, 'Muted until the new page confirms its speaker');
       assert.deepEqual(await run(first, "['attached', 'detached', 'paused'].map(name => [window.early.results[name], window.early[name].paused, window.early[name].sinkAtPlay])"),
         [[undefined, true, undefined], [undefined, true, undefined], ['AbortError', true, undefined]], 'Audible players wait for the first route and pause cancels before any route arrives');
+      await run(first, 'window.early.becomesVideo.srcObject = new MediaStream(window.early.video.srcObject.getVideoTracks())');
+      await waitFor(() => run(first, "window.early.results.becomesVideo === 'playing'"), 'video-only replacement starts before the first route');
       const unresolvedRoute = heldRoutes.find(args => /** @type {import('../src/audio.cjs').SentRoute} */ (args[0]).output === null);
       assert.ok(unresolvedRoute, 'The new page first receives an unresolved device route');
       send.call(contents, 'glkvm:audio-route', ...unresolvedRoute);
@@ -605,6 +607,8 @@ server.listen(0, '127.0.0.1', async () => {
         [[undefined, true, undefined], [undefined, true, undefined]], 'An unresolved first route does not start playback on the default speaker');
       await run(first, "window.early.paused.play().then(() => { window.unresolvedPause = 'playing'; }, error => { window.unresolvedPause = error.name; }); window.early.paused.pause();");
       await waitFor(() => run(first, "window.unresolvedPause === 'AbortError'"), 'pause cancels while the speaker remains unresolved');
+      await run(first, 'window.early.losesAudio.srcObject.addTrack(window.early.video.srcObject.getVideoTracks()[0]); window.early.losesAudio.srcObject.removeTrack(window.early.losesAudio.srcObject.getAudioTracks()[0])');
+      await waitFor(() => run(first, "window.early.results.losesAudio === 'playing'"), 'removing the last audio track starts video while the speaker remains unresolved');
     } finally {
       contents.send = send;
       for (const args of heldRoutes) send.call(contents, 'glkvm:audio-route', ...args);
@@ -661,8 +665,10 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => !first.webContents.isAudioMuted(), 'unmuted while paused');
     // Microphone access and device discovery continue for the kept profile.
     await save(value => { value.devices[0].audio.foreground.input = pick(mic1); });
-    await waitFor(() => status(first)?.input === 'live' && status(first)?.inputDevice === mic1.deviceId && status(first)?.openInputs === 1, 'kept profile opens its microphone');
     await waitFor(() => reports.get(first.webContents.id)?.some(device => device.kind === 'audioinput'), 'microphone names listed while paused');
+    assert.equal(status(first)?.input, 'idle', 'Saving a microphone choice does not start capture after the page reload');
+    assert.equal(await run(first, 'window.startMic()'), 'live', 'The page starts capture using the kept profile');
+    await waitFor(() => status(first)?.input === 'live' && status(first)?.inputDevice === mic1.deviceId && status(first)?.openInputs === 1, 'kept profile opens its microphone');
     await run(first, "navigator.mediaDevices.dispatchEvent(new Event('devicechange'))");
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.deepEqual([status(first)?.inputDevice, status(first)?.output, (await liveProfiles()).first.foreground], [mic1.deviceId, speaker1.deviceId, true], 'A device change keeps the paused profile');
