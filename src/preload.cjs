@@ -406,6 +406,10 @@ function installAudioRouting(bridge) {
   /** @type {(value?: unknown) => void} */
   let routeArrived = () => {};
   const firstRoute = new Promise(resolve => { routeArrived = resolve; });
+  /** @type {() => void} */
+  let routeUpdated = () => {};
+  /** @type {Promise<void>} */
+  let nextRoute = new Promise(resolve => { routeUpdated = resolve; });
 
   // Output: every media element and page AudioContext follows the selected sink.
   /** @typedef {(HTMLMediaElement | AudioContext) & {setSinkId(id: string | {type: 'none'}): Promise<void>, sinkId: unknown}} Sink */
@@ -515,14 +519,23 @@ function installAudioRouting(bridge) {
     const target = /** @type {Sink} */ (/** @type {unknown} */ (this));
     register(this);
     // A player without audio starts at once, even before the first route.
-    if (route ? routed(target) : silent(target)) return nativePlay.call(this);
+    if (silent(target) || sinkMatches(target)) return nativePlay.call(this);
     // Start only on the selected speaker, following route changes while waiting; never on the system default.
     const token = {};
     pendingPlays.set(this, token);
     return (async () => {
       await firstRoute;
       if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
-      try { while (!routed(target)) await applySink(target); } catch {
+      try {
+        while (!silent(target) && !sinkMatches(target)) {
+          // An initial or superseding unresolved route keeps the window muted,
+          // but must not let the player start on the system default either.
+          if (route?.output === null) await nextRoute;
+          else await applySink(target);
+          if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
+        }
+      } catch {
+        if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
         if (pendingPlays.get(this) === token) pendingPlays.delete(this);
         throw new DOMException('The selected speaker could not be used.', 'NotAllowedError');
       }
@@ -760,6 +773,9 @@ function installAudioRouting(bridge) {
     const previous = route;
     route = { inputAllowed: next.inputAllowed === true, input: typeof next.input === 'string' ? next.input : null, inputMissing: next.inputMissing === true, output: typeof next.output === 'string' ? next.output : null, generation: next.generation };
     const current = route;
+    const updated = routeUpdated;
+    nextRoute = new Promise(resolve => { routeUpdated = resolve; });
+    updated();
     routeArrived();
     // A different speaker is unconfirmed until applied; the same confirmed speaker stays valid.
     if (!previous || previous.output !== route.output || outputState !== 'ok') { outputState = 'pending'; void refreshOutput(); }
