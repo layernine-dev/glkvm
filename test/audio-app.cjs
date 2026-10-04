@@ -342,7 +342,7 @@ server.listen(0, '127.0.0.1', async () => {
       const audio = window.ungated;
       const events = []; for (const name of ['play', 'pause']) audio.addEventListener(name, () => events.push(name + ':' + (audio.sinkId ? 'routed' : 'default')));
       document.querySelector('iframe').contentWindow.HTMLMediaElement.prototype.play.call(audio);
-      for (let i = 0; i < 50 && (audio.paused || audio.sinkId !== ${JSON.stringify(speaker1.deviceId)}); i++) await new Promise(resolve => setTimeout(resolve, 100));
+      for (let i = 0; i < 50 && (events.length < 3 || audio.paused || audio.sinkId !== ${JSON.stringify(speaker1.deviceId)}); i++) await new Promise(resolve => setTimeout(resolve, 100));
       return [events.slice(0, 3), audio.paused, audio.sinkId];
     })()`), [['play:default', 'pause:default', 'play:routed'], false, speaker1.deviceId], 'Ungated start paused and resumed on the selected speaker');
     await waitFor(() => status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'routed after ungated start');
