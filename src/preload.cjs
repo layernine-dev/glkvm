@@ -561,7 +561,9 @@ function installAudioRouting(bridge) {
   let latest = null;
   /** The automatic microphone start in progress. Captures the page requests meanwhile report
    * to it, so an older attempt's outcome never counts for a newer one.
-   * @type {{capture: Capture | null, failed: 'denied' | 'error' | null} | null} */
+   * A capture of another attempt (or none) failing meanwhile marks it foreign: a firmware dialog
+   * that appears then is not this attempt's evidence.
+   * @type {{capture: Capture | null, failed: 'denied' | 'error' | null, foreign: boolean} | null} */
   let microphoneAttempt = null;
   /** @param {MediaStream} stream */
   const release = stream => { stream.getTracks().forEach(track => nativeStop.call(track)); openStreams.delete(stream); };
@@ -668,12 +670,17 @@ function installAudioRouting(bridge) {
     });
     return capture.running;
   };
+  /** @param {typeof microphoneAttempt} attempt @param {'denied' | 'error'} state */
+  const failedFor = (attempt, state) => {
+    if (attempt) attempt.failed ||= state;
+    if (microphoneAttempt && microphoneAttempt !== attempt) microphoneAttempt.foreign = true;
+  };
   /** @param {boolean | MediaTrackConstraints} audio */
   const createCapture = async audio => {
     const attempt = microphoneAttempt;
     const timeout = new Promise(resolve => setTimeout(resolve, 5000));
     await Promise.race([firstRoute, timeout]);
-    if (!route?.inputAllowed) { if (attempt) attempt.failed ||= 'denied'; throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError'); }
+    if (!route?.inputAllowed) { failedFor(attempt, 'denied'); throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError'); }
     const base = audio && typeof audio === 'object' ? { ...audio } : {};
     delete base.deviceId; delete base.groupId;
     const context = new NativeAudioContext(/** @type {AudioContextOptions} */ ({ latencyHint: 'interactive', sinkId: { type: 'none' } }));
@@ -688,7 +695,7 @@ function installAudioRouting(bridge) {
     await reconcile(capture);
     if (capture.state === 'denied' || capture.state === 'error') {
       const state = capture.state;
-      if (attempt) attempt.failed ||= state;
+      failedFor(attempt, state);
       stopCapture(capture);
       throw new DOMException(state === 'denied' ? 'Microphone permission was denied.' : 'The microphone could not be started.', state === 'denied' ? 'NotAllowedError' : 'NotReadableError');
     }
@@ -758,6 +765,8 @@ function installAudioRouting(bridge) {
   /** @type {{session: object, wanted: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}, since: number} | null} */
   let pendingStartup = null;
   let startupRuns = 0;
+  /** When recent sessions started applying: at most five per five seconds. @type {number[]} */
+  let startupStarts = [];
   /** One failed microphone start per page: no repeated permission prompts or firmware dialogs.
    * @type {'denied' | 'error' | null} */
   let microphoneBlocked = null;
@@ -809,10 +818,14 @@ function installAudioRouting(bridge) {
       reportStartup(wanted, state, state);
       return;
     }
+    // Bounds a firmware that keeps replacing its video track: a session over the limit stays
+    // waiting and applies once the limit allows, unless a newer session replaces it first.
+    const now = Date.now();
+    startupStarts = startupStarts.filter(time => now - time < 5000);
+    if (startupStarts.length >= 5) return;
+    startupStarts.push(now);
     handledSession = session; pendingStartup = null;
-    // Bounds a firmware that keeps replacing its video track.
-    if (++startupRuns > 20) return;
-    void applyStartup(stores, session, wanted, startupRuns);
+    void applyStartup(stores, session, wanted, ++startupRuns);
   }
   const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
   /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {object} session @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run */
@@ -851,7 +864,7 @@ function installAudioRouting(bridge) {
     else if (!wanted.microphoneAccess) microphoneState = 'denied';
     else if (microphoneBlocked) microphoneState = microphoneBlocked;
     else {
-      const attempt = { capture: /** @type {Capture | null} */ (null), failed: /** @type {'denied' | 'error' | null} */ (null) };
+      const attempt = { capture: /** @type {Capture | null} */ (null), failed: /** @type {'denied' | 'error' | null} */ (null), foreign: false };
       microphoneAttempt = attempt;
       try {
         microphoneState = apply(micOn, true, setMicrophone);
@@ -860,14 +873,28 @@ function installAudioRouting(bridge) {
           // Wait (bounded) for the page's own capture: live, failed, ended by the firmware, or never
           // requested. A pending request, such as the macOS permission prompt, gets longer.
           const started = Date.now();
-          // The firmware ends a failed attempt (a failed capture or audio answer) with this dialog.
-          const failureShown = () => document.querySelector('.mic-permission-error-modal') !== null;
+          // The firmware ends a failed attempt (a failed capture or audio answer) with this dialog,
+          // shown before it mutes. Only a dialog opened during this attempt counts: one still open
+          // from earlier (a failed manual capture or an older attempt) is no evidence, and the
+          // firmware opens no second one meanwhile. Such an ambiguous end counts as turned off on
+          // the page: at worst a failure is retried once in the next session, never a false block.
+          const openDialogs = () => [...document.querySelectorAll('.mic-permission-error-modal')].filter(dialog => dialog.getClientRects().length > 0);
+          const earlier = new Set(openDialogs());
+          let dialogShown = false;
+          const failureShown = () => {
+            const open = openDialogs();
+            // A closed earlier dialog that opens again belongs to this attempt.
+            for (const dialog of earlier) if (!open.includes(dialog)) earlier.delete(dialog);
+            dialogShown ||= !attempt.foreign && open.some(dialog => !earlier.has(dialog));
+            return dialogShown;
+          };
           /** @type {'applied' | 'denied' | 'error' | 'cancelled' | null} */
           let outcome = null;
           while (!outcome) {
             await sleep(100);
             if (!fresh()) return;
             const capture = attempt.capture;
+            failureShown();
             if (attempt.failed) outcome = attempt.failed;
             else if (capture?.state === 'live' && !capture.stopped) outcome = 'applied';
             else if (!micOn()) {

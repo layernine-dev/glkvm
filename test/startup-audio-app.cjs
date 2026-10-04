@@ -20,7 +20,8 @@ app.setPath('userData', directory);
 // microphone error dialog and re-mutes it, and a capture that resolves after a mute is stale and stopped.
 // Nothing is played. Options come from localStorage 'fixture-firmware' and apply on load:
 // answerError (the audio answer fails before any microphone request, then re-mutes), answerHang
-// (no microphone request at all), micDelay (ms before the request), keepOnFailure (no re-mute).
+// (no microphone request at all), micDelay (ms before the request), keepOnFailure (no re-mute),
+// earlierDialog (the error dialog is already open from before, as after a failed manual capture).
 const firmwareScript = `<div id="app"></div><script>
 (() => {
   const options = JSON.parse(localStorage.getItem('fixture-firmware') || '{}');
@@ -33,11 +34,13 @@ const firmwareScript = `<div id="app"></div><script>
     window.mic = { stream, pc };
   };
   window.stopMic = () => { if (!window.mic) return; window.mic.stream.getTracks().forEach(track => track.stop()); window.mic.pc.close(); window.mic = null; };
-  const failed = () => {
-    window.micErrors++;
+  // Like the firmware, one dialog at a time.
+  const showDialog = () => {
     if (document.querySelector('.mic-permission-error-modal')) return;
     const modal = document.createElement('div'); modal.className = 'ant-modal-wrap mic-permission-error-modal'; document.body.append(modal);
   };
+  const failed = () => { window.micErrors++; showDialog(); };
+  if (options.earlierDialog) showDialog();
   const usb = { enableMic: options.enableMic !== false, initLoading: options.initLoading === true };
   const kvm = { configState: { volumeOn: false, initVideoSessionFinished: false }, isDirectMode: options.direct === true,
     setVolumeOn(on) { window.firmwareCalls.push(['volume', on, window.manualCall ? 'manual' : 'auto']); kvm.configState.volumeOn = on; } };
@@ -106,15 +109,15 @@ const reports = new Map();
 const startupPeers = [];
 /** Routes sent to each page. @type {Map<number, import('../src/audio.cjs').SentRoute[]>} */
 const routes = new Map();
-/** Every startup report, with whether the page's latest route still had an unresolved microphone.
- * @type {[number, import('../src/audio.cjs').StartupStatus, boolean][]} */
+/** Every startup report, with whether the page's latest route still had an unresolved microphone, and when.
+ * @type {[number, import('../src/audio.cjs').StartupStatus, boolean, number][]} */
 const startupLog = [];
 const titleOf = (/** @type {Electron.WebContents} */ contents) => BrowserWindow.fromWebContents(contents)?.getTitle() || '';
 ipcMain.on('glkvm:audio-status', (event, status) => statuses.set(event.sender.id, status));
 ipcMain.on('glkvm:audio-devices', (event, list) => reports.set(event.sender.id, list));
 ipcMain.on('glkvm:audio-startup-status', (event, status) => {
   startups.set(event.sender.id, status); startupPeers.push(titleOf(event.sender));
-  startupLog.push([event.sender.id, status, routes.get(event.sender.id)?.at(-1)?.inputMissing === true]);
+  startupLog.push([event.sender.id, status, routes.get(event.sender.id)?.at(-1)?.inputMissing === true, Date.now()]);
 });
 app.on('web-contents-created', (_event, contents) => {
   const send = contents.send;
@@ -254,17 +257,28 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(async () => (await firmware(first)).volumeOn, 'reapplied after a new video session');
     assert.deepEqual((await autoCalls(first)).slice(applied), [['volume', true, 'auto']], 'The microphone already matched');
 
-    // Replacing the video transport rapidly applies at most once per session, without a loop.
+    // Replacing the video transport rapidly is rate limited, without a loop: at most five sessions
+    // start applying per five seconds, counted by their final reports.
+    const burstStart = startupLog.length;
+    const finishedTimes = () => startupLog.slice(burstStart).filter(([id, status]) => id === first.webContents.id && status.speakerState !== 'waiting' && status.microphoneState !== 'waiting').map(entry => entry[3]);
     await run(first, 'window.manual(({ kvm }) => kvm.setVolumeOn(false))');
-    const beforeBurst = (await autoCalls(first)).length;
-    await run(first, '(async () => { for (let i = 0; i < 3; i++) { window.connect(); await new Promise(r => setTimeout(r, 100)); } })()');
+    await run(first, '(async () => { for (let i = 0; i < 20; i++) { window.connect(); await new Promise(r => setTimeout(r, 400)); } })()');
     await waitFor(async () => (await firmware(first)).volumeOn, 'applied after the burst');
-    await sleep(2500);
-    const burst = (await autoCalls(first)).length - beforeBurst;
-    assert.ok(burst >= 1 && burst <= 3, `Bounded applications: ${burst}`);
-    const settledCount = (await autoCalls(first)).length;
+    await sleep(5500);
+    const settledCount = finishedTimes().length;
+    assert.ok(settledCount >= 1, 'The burst applied');
     await sleep(1500);
-    assert.equal((await autoCalls(first)).length, settledCount, 'No startup loop');
+    assert.equal(finishedTimes().length, settledCount, 'No startup loop');
+    // The limit recovers: every later reconnect applies, well past twenty sessions in one page.
+    for (let i = 0; i < 22; i++) {
+      await run(first, 'window.manual(({ kvm }) => kvm.setVolumeOn(false))');
+      await run(first, 'window.connect()');
+      await waitFor(async () => (await firmware(first)).volumeOn, `reconnect ${i + 1} applied`);
+    }
+    const times = finishedTimes();
+    assert.ok(times.length >= settledCount + 22, `Every reconnect reported: ${times.length}`);
+    // Reports follow the start within milliseconds; the margin covers IPC delivery.
+    times.forEach((time, i) => assert.ok(i < 5 || time - times[i - 5] >= 4500, `At most five per five seconds: ${times.join(', ')}`));
 
     // Logout: the login helper signs in again and the reloaded page applies startup again.
     startups.delete(first.webContents.id);
@@ -395,6 +409,26 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual([await autoCalls(second), startup(second)?.microphoneState, state.micMuted, state.micErrors], [[['mic', true, 'auto'], ['mic', true, 'auto']], 'applied', false, 0], 'Started again after reconnect');
     assert.deepEqual([reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], [0, 0]);
 
+    // A firmware dialog still open from before the attempt is not its failure: a manual mute during
+    // the pending capture ends the attempt without a block, and the next video session starts again.
+    hold = true;
+    since = startupLog.length;
+    await reload(second, { earlierDialog: true });
+    await waitFor(() => held.length > 0, 'pending microphone request beside the earlier dialog');
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(true))');
+    await waitFor(() => settled(second), 'attempt ended by the manual mute beside the earlier dialog');
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], ['applied', 0, 0], 'The earlier dialog is no failure');
+    held.splice(0).forEach(callback => callback(true));
+    await waitFor(() => run(second, 'window.staleMics > 0'), 'stale capture resolved beside the earlier dialog');
+    await waitFor(() => (statuses.get(second.webContents.id)?.openInputs ?? 0) === 0, 'stale capture closed beside the earlier dialog');
+    hold = false;
+    startups.delete(second.webContents.id);
+    await run(second, 'window.connect()');
+    await waitFor(() => settled(second) && statuses.get(second.webContents.id)?.input === 'live', 'microphone started after the earlier dialog');
+    state = await firmware(second);
+    assert.deepEqual([await autoCalls(second), startup(second)?.microphoneState, state.micMuted, state.micErrors], [[['mic', true, 'auto'], ['mic', true, 'auto']], 'applied', false, 0], 'Started again after reconnect');
+    assert.deepEqual([reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], [0, 0]);
+
     // Permission denied: one attempt, ended, and not repeated for a new video session.
     let requests = 0;
     second.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => { if (permission === 'media') requests++; callback(permission === 'pointerLock'); });
@@ -459,7 +493,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual([await autoCalls(second), state.micMuted, requests - before, statuses.get(second.webContents.id)?.openInputs], [[['mic', true, 'auto'], ['mic', false, 'auto']], true, 0, 0], 'Ended once');
 
     assert.equal(first.webContents.isAudioMuted() && second.webContents.isAudioMuted(), true, 'Global mute held throughout');
-    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, bounded transport replacement, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, a manual mute during a pending capture restarted by the next session, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
+    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, rate-limited transport replacement that recovers past twenty sessions, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, a manual mute during a pending capture restarted by the next session, also beside an earlier error dialog, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Startups:', JSON.stringify([...startups]), 'Statuses:', JSON.stringify([...statuses]));
