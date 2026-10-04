@@ -23,12 +23,14 @@
           <div id="device-list"></div>
           <button type="button" id="add-device">Add connection</button>
           <p class="hint">Use a LAN or Tailscale address. Passwords are encrypted using your macOS keychain. Leave a saved password blank to keep it; changing the address clears it. Saving a password retries sign-in in the background. Start mode and window resolution apply when reopening a connection. Resolution scales video pixels, accounting for display density; sizes exceeding the screen or 6K limit fall back to automatic sizing.</p>
+          <p class="hint">Audio applies only to that connection's window and never changes your Mac's default devices. The focused setting is used while its window is focused, visible and not minimized; otherwise the background setting applies. All microphones and speakers on this Mac are listed, even while a connection is closed; listing never turns a microphone on. Microphones are only used when the device page turns on its own microphone. An unavailable device stays silent instead of falling back, and choices are kept when you change the address.</p>
+          <p class="hint">“When connecting” turns on the device page's own Sound or Microphone control the next time the connection connects or reconnects; saving does not change a running session, and later changes on the device page are kept. The microphone turns on only if it is enabled on the device (USB microphone) and selected here for the current window state. It is unavailable in Direct H.264 mode, and saving a different address turns it off. Mute device audio in Controls still applies.</p>
         </section>
         <section id="controls" aria-labelledby="controls-title" hidden>
           <header><h1 id="controls-title">Controls</h1><p>Choose how your device windows behave.</p></header>
           <div class="group">
             <label class="setting-row"><span><strong>Keyboard and mouse</strong><small>Control the remote computer in the clean view.</small></span><input id="control-enabled" type="checkbox" role="switch"></label>
-            <label class="setting-row"><span><strong>Mute device audio</strong><small>Keep the windows silent, including the device interface.</small></span><input id="muted" type="checkbox" role="switch"></label>
+            <label class="setting-row"><span><strong>Mute device audio</strong><small>Keep all windows silent. Per-connection speakers apply when unmuted.</small></span><input id="muted" type="checkbox" role="switch"></label>
           </div>
           <h2>Keyboard shortcuts</h2>
           <dl class="shortcuts group">
@@ -39,7 +41,7 @@
             <div><dt>Reload device</dt><dd>⌘R</dd></div>
           </dl>
           <p class="hint">In move mode, drag the video to reposition the window. Press ⌘⇧M again to resume control. In view-only mode, you can always drag the video.</p>
-          <p class="hint">Device settings appear in the same window with ⌘⇧O. Press it again to hide the controls and window decoration. Visible settings are included when sharing that window. Camera, microphone and downloads remain unavailable.</p>
+          <p class="hint">Device settings appear in the same window with ⌘⇧O. Press it again to hide the controls and window decoration. Visible settings are included when sharing that window. Camera access and downloads remain unavailable.</p>
         </section>
         <section id="keyboard" aria-labelledby="keyboard-title" hidden>
           <header><h1 id="keyboard-title">Keyboard</h1><p>Send special keys and clipboard text to the remote computer.</p></header>

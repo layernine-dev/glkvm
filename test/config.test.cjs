@@ -59,3 +59,28 @@ test('connection presentation defaults migrate and invalid values are rejected',
   }
   assert.throws(() => validateConfig({ ...legacy, devices: [{ ...legacy.devices[0], startMode: 'unknown' }] }));
 });
+
+test('startup audio persists independently per connection and malformed values cannot be saved', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-config-'));
+  const file = path.join(dir, 'settings.json');
+  try {
+    const value = defaults();
+    value.devices.push({ id: 'lab', name: 'Lab', origin: 'https://lab.test', openAtStartup: false });
+    const glkvm = /** @type {import('../src/audio.cjs').AudioSettings} */ (value.devices[0].audio);
+    glkvm.startup = { speaker: true, microphone: false };
+    const saved = writeConfig(file, value);
+    assert.deepEqual(readConfig(file).devices.map(device => device.audio?.startup), [{ speaker: true, microphone: false }, { speaker: false, microphone: false }]);
+    const before = fs.readFileSync(file, 'utf8');
+    const broken = JSON.parse(before);
+    broken.devices[1].audio.startup = { speaker: 'yes', microphone: false };
+    assert.throws(() => writeConfig(file, broken));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    fs.writeFileSync(file, JSON.stringify(broken));
+    assert.throws(() => readConfig(file), /startup audio/, 'A malformed file is reported, not silently reset');
+    const legacy = JSON.parse(before);
+    for (const device of legacy.devices) delete device.audio.startup;
+    fs.writeFileSync(file, JSON.stringify(legacy));
+    assert.deepEqual(readConfig(file).devices.map(device => device.audio?.startup), [{ speaker: false, microphone: false }, { speaker: false, microphone: false }], 'Older files migrate with both off');
+    assert.equal(saved.devices[0].audio?.startup.speaker, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

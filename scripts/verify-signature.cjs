@@ -1,9 +1,8 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-
-// Keep this identity and the bundle identifiers stable across local updates.
-const signingIdentity = 'Apple Development: Uwe Schwarz (54988A349V)';
+const { resolveSigningIdentity } = require('./signing-identity.cjs');
+const catalogName = 'glkvm-audio-catalog';
 
 /** @param {string[]} args */
 function codesign(args) {
@@ -13,8 +12,8 @@ function codesign(args) {
   return result.stdout + result.stderr;
 }
 
-/** @param {string} appPath */
-function verifySignature(appPath) {
+/** @param {string} appPath @param {string} signingIdentity */
+function verifySignature(appPath, signingIdentity) {
   codesign(['--verify', '--deep', '--strict', '--verbose=2', appPath]);
   const frameworks = path.join(appPath, 'Contents/Frameworks');
   const helpers = fs.readdirSync(frameworks).filter(name => name.endsWith('.app'));
@@ -39,15 +38,22 @@ function verifySignature(appPath) {
       throw new Error(`The code identity is not stable across updates: ${bundle}`);
     }
   }
-  console.log(`Verified signed app and ${helpers.length} helpers: ${signingIdentity}`);
+  // The device catalog only reads CoreAudio properties: no entitlements.
+  const catalog = path.join(appPath, 'Contents/Resources', catalogName);
+  const details = codesign(['--display', '--verbose=4', catalog]);
+  const entitlements = codesign(['--display', '--entitlements', '-', '--xml', catalog]);
+  if (!details.includes(`Authority=${signingIdentity}\n`) || !/^Identifier=dev\.layernine\.glkvm-clean\.audio-catalog$/m.test(details) || !/^CodeDirectory .*flags=.*\bruntime\b/m.test(details) || /<key>/.test(entitlements)) {
+    throw new Error(`Unexpected signature for the audio device catalog: ${catalog}`);
+  }
+  console.log(`Verified signed app, ${helpers.length} helpers and the audio device catalog: ${signingIdentity}`);
 }
 
-module.exports = { signingIdentity, verifySignature };
+module.exports = { verifySignature, catalogName };
 if (require.main === module) {
   const appPath = process.argv[2];
   if (!appPath) { console.error('Usage: node scripts/verify-signature.cjs /path/to/GLKVM\\ Clean.app'); process.exitCode = 1; }
   else {
-    try { verifySignature(path.resolve(appPath)); }
+    try { verifySignature(path.resolve(appPath), resolveSigningIdentity()); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
   }
 }

@@ -16,6 +16,8 @@ async function prepareConfig(value, previous, storage) {
     // Never accept ciphertext supplied by a renderer, or reuse it on another host.
     delete device.encryptedPassword;
     const old = previous.devices.find(item => item.id === device.id && item.origin === device.origin);
+    // A new address never inherits automatic microphone start; device choices are kept.
+    if (device.audio && previous.devices.some(item => item.id === device.id && item.origin !== device.origin)) device.audio.startup.microphone = false;
     const change = input.devices[index];
     if (change.password !== undefined && (typeof change.password !== 'string' || change.password.length > 4096)) throw new Error('Password must be at most 4096 characters.');
     if (typeof change.password === 'string' && change.password.length) {
