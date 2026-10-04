@@ -237,7 +237,7 @@ server.listen(0, '127.0.0.1', async () => {
     const second = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Second');
     assert.ok(second);
     await waitFor(() => second.isFocused() && !second.webContents.isLoading());
-    assert.ok(Menu.getApplicationMenu()?.items.some(item => item.label === 'Device — Second'));
+    await waitFor(() => Menu.getApplicationMenu()?.items.some(item => item.label === 'Device — Second'));
     second.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['meta'] });
     await waitFor(() => clean.isFocused());
     assert.ok(globalShortcut.isRegistered('CommandOrControl+1'));
