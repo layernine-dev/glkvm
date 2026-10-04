@@ -22,6 +22,7 @@ function render() {
     const row = document.createElement('div');
     row.className = 'device';
     row.innerHTML = `<div class="device-fields"><label for="name-${index}">Name</label><input id="name-${index}" type="text" maxlength="60" required autocomplete="off"><label for="address-${index}">Address</label><input id="address-${index}" type="url" required placeholder="https://device.example" autocomplete="off" spellcheck="false"><label for="password-${index}">Password</label><input id="password-${index}" type="password" autocomplete="new-password" maxlength="4096"><span></span><button type="button" class="forget">Forget saved password</button><label for="mode-${index}">Start mode</label><select id="mode-${index}" class="start-mode"><option value="window-decoration-less">Window-decoration-less</option><option value="options-enabled">Options-enabled</option></select><label for="scale-${index}">Window resolution</label><select id="scale-${index}" class="window-scale"><option value="">Automatic</option>${[0.25, 0.5, 0.75, 1, 1.5, 2].map(scale => `<option value="${scale}">${scale}×</option>`).join('')}</select></div><div class="audio" role="group" aria-label="Audio"></div><div class="device-bottom"><label class="check"><input type="checkbox"> Open at startup</label><div class="device-actions"><button type="button" class="open">Open</button><button type="button" class="remove">Remove</button></div></div>`;
+    const audioGroup = row.querySelector('.audio');
     const name = row.querySelector('input[type=text]');
     const address = row.querySelector('input[type=url]');
     const password = row.querySelector('input[type=password]');
@@ -42,12 +43,16 @@ function render() {
     address.value = device.origin;
     startup.checked = device.openAtStartup;
     name.addEventListener('input', () => { device.name = name.value; changed(); });
-    address.addEventListener('input', () => { device.origin = address.value; changed(); });
+    address.addEventListener('input', () => {
+      device.origin = address.value;
+      // Saving a new address turns off the microphone at connect; show it before saving.
+      if (device.id && device.audio?.startup.microphone) { device.audio.startup.microphone = false; renderAudio(audioGroup, device); }
+      changed();
+    });
     startup.addEventListener('change', () => { device.openAtStartup = startup.checked; changed(); });
     row.querySelector('.remove').addEventListener('click', () => {
       config.devices.splice(index, 1); render(); changed();
     });
-    const audioGroup = row.querySelector('.audio');
     renderAudio(audioGroup, device);
     // A refresh skipped while a choice was in progress applies once focus leaves the group.
     audioGroup.addEventListener('focusout', () => setTimeout(() => {
@@ -132,7 +137,7 @@ document.querySelector('#paste-keymap').addEventListener('change', event => { co
 // Devices come from the Mac's audio catalog, so every connection can choose them,
 // open or not. Choices are saved by device UID and resolved inside each connection.
 function defaultAudio() {
-  return { foreground: { input: 'disabled', output: 'default' }, background: { input: 'disabled', output: 'default' } };
+  return { foreground: { input: 'disabled', output: 'default' }, background: { input: 'disabled', output: 'default' }, startup: { speaker: false, microphone: false } };
 }
 const audioProfiles = [['foreground', 'focused'], ['background', 'in background']];
 function choiceValue(choice) {
@@ -154,6 +159,7 @@ function refreshAudio() {
 }
 function renderAudio(container, device) {
   device.audio ||= defaultAudio();
+  device.audio.startup ||= defaultAudio().startup;
   const live = device.id ? audio.connections?.[device.id] : undefined;
   container.replaceChildren();
   const heading = document.createElement('span'); heading.className = 'audio-title'; heading.textContent = 'Audio';
@@ -185,6 +191,18 @@ function renderAudio(container, device) {
       container.append(select);
     }
   }
+  for (const [key, title] of [['speaker', 'Turn on device sound when connecting'], ['microphone', 'Turn on microphone when connecting']]) {
+    const label = document.createElement('label'); label.className = 'check audio-startup';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.setAttribute('role', 'switch');
+    toggle.className = `audio-startup-${key}`;
+    toggle.checked = device.audio.startup[key];
+    toggle.addEventListener('change', () => {
+      device.audio.startup[key] = toggle.checked; changed();
+      container.querySelector('.audio-status').textContent = audioStatus(device, live);
+    });
+    label.append(toggle, ` ${title}`);
+    container.append(label);
+  }
   const status = document.createElement('p'); status.className = 'audio-status'; status.setAttribute('role', 'status');
   status.textContent = audioStatus(device, live);
   container.append(status);
@@ -205,8 +223,22 @@ function audioStatus(device, live) {
     const output = { ok: '', pending: 'Switching speaker — muted until it is ready.', missing: 'Selected speaker unavailable — this window is muted.', error: 'Speaker could not be selected — this window is muted.' }[state.outputState];
     parts.push(input, output);
   }
+  parts.push(startupStatus(live?.startup));
   // The device page plays sound through its own audio element, which stays silent until its Sound control is on.
   if (config.muted) parts.push('All connections are muted. To hear this connection, turn off Mute device audio in Controls and save, then turn on Sound on the device page.');
   if (dirty) parts.push('Save to apply changes.');
   return parts.filter(Boolean).join(' ');
+}
+function startupStatus(startup) {
+  if (!startup) return '';
+  const { speakerState: speaker, microphoneState: microphone } = startup;
+  if (speaker === 'waiting' || microphone === 'waiting') return 'Waiting for the device player to apply the connect settings.';
+  if (speaker === 'unsupported' || microphone === 'unsupported') return 'Sound and microphone at connect are unavailable in Direct H.264 mode or with this device page.';
+  const parts = [];
+  if (speaker === 'error') parts.push('Device sound could not be set at connect.');
+  if (microphone === 'unavailable') parts.push('Microphone not turned on at connect: enable the USB microphone on the device and select a microphone for this window state.');
+  else if (microphone === 'denied') parts.push('Microphone not turned on at connect: access was denied. Check System Settings → Privacy & Security → Microphone.');
+  else if (microphone === 'error') parts.push('Microphone could not be turned on at connect.');
+  else if (startup.microphone && microphone === 'applied') parts.push('Microphone turned on at connect.');
+  return parts.join(' ');
 }
