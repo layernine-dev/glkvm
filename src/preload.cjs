@@ -501,7 +501,7 @@ function installAudioRouting(bridge) {
   const silent = target => {
     if (!(target instanceof HTMLMediaElement)) return target.state === 'closed';
     const source = srcObject.get?.call(target);
-    return source instanceof NativeMediaStream && !source.getAudioTracks().length;
+    return source instanceof NativeMediaStream && !source.getAudioTracks().some(track => track.readyState === 'live');
   };
   /** An unresolved speaker (null) is never applied, not even as the system default.
    * The main process keeps the window muted while it is unresolved. */
@@ -567,6 +567,9 @@ function installAudioRouting(bridge) {
     pendingPlays.get(this)?.cancel();
     pendingPlays.set(this, token);
     return (async () => {
+      // Native track termination and another frame's track methods can bypass
+      // page hooks without emitting removetrack. Observe only while play waits.
+      const sourceWatch = setInterval(() => { if (silent(target)) token.wake(); }, 250);
       try {
         while (!silent(target) && !sinkMatches(target)) {
           // An initial or superseding unresolved route keeps the window muted,
@@ -578,7 +581,7 @@ function installAudioRouting(bridge) {
         if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
         if (pendingPlays.get(this) === token) pendingPlays.delete(this);
         throw new DOMException('The selected speaker could not be used.', 'NotAllowedError');
-      }
+      } finally { clearInterval(sourceWatch); }
       if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
       pendingPlays.delete(this);
       return nativePlay.call(this);
@@ -586,26 +589,10 @@ function installAudioRouting(bridge) {
   };
   HTMLMediaElement.prototype.play = gatedPlay;
   HTMLMediaElement.prototype.pause = function pause() { pendingPlays.get(this)?.cancel(); pendingPlays.delete(this); return nativePause.call(this); };
-  /** Source changes can make a waiting player video-only without a new audio route. @param {MediaStream} stream */
-  const refreshSource = stream => {
-    for (const ref of sinks) {
-      const sink = ref.deref();
-      if (sink instanceof HTMLMediaElement && srcObject.get?.call(sink) === stream) {
-        register(sink);
-        pendingPlays.get(sink)?.wake();
-      }
-    }
-  };
-  const watchedStreams = new WeakSet();
   Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
     ...srcObject,
     set(value) {
       /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value);
-      if (value instanceof NativeMediaStream && !watchedStreams.has(value)) {
-        watchedStreams.add(value);
-        value.addEventListener('addtrack', () => refreshSource(value));
-        value.addEventListener('removetrack', () => refreshSource(value));
-      }
       register(this);
       pendingPlays.get(this)?.wake();
     },
@@ -614,12 +601,10 @@ function installAudioRouting(bridge) {
   const nativeAddTrack = MediaStream.prototype.addTrack;
   MediaStream.prototype.addTrack = function addTrack(track) {
     nativeAddTrack.call(this, track);
-    if (track?.kind === 'audio') refreshSource(this);
-  };
-  const nativeRemoveTrack = MediaStream.prototype.removeTrack;
-  MediaStream.prototype.removeTrack = function removeTrack(track) {
-    nativeRemoveTrack.call(this, track);
-    if (track?.kind === 'audio') refreshSource(this);
+    if (track?.kind === 'audio') for (const ref of sinks) {
+      const sink = ref.deref();
+      if (sink instanceof HTMLMediaElement && srcObject.get?.call(sink) === this) register(sink);
+    }
   };
   if (NativeAudioContext) {
     // New contexts render to no device until the selected speaker is applied.
