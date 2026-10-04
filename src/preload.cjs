@@ -865,13 +865,18 @@ function installAudioRouting(bridge) {
     else if (microphoneBlocked) microphoneState = microphoneBlocked;
     else {
       const attempt = { capture: /** @type {Capture | null} */ (null), failed: /** @type {'denied' | 'error' | null} */ (null), foreign: false };
+      // A firmware audio session that outlives the video session keeps its muted microphone track
+      // (disabled, still capturing) and unmutes it by enabling it again, without a new request.
+      // Only the page's own track changes from disabled to enabled during the attempt.
+      const disabled = [...captures].flatMap(capture => [...capture.tracks].filter(track => track.readyState === 'live' && !track.enabled));
+      const reenabled = () => [...captures].find(capture => !capture.stopped && [...capture.tracks].some(track => disabled.includes(track) && track.enabled && track.readyState === 'live')) || null;
       microphoneAttempt = attempt;
       try {
         microphoneState = apply(micOn, true, setMicrophone);
         if (microphoneState === 'applied') {
           reportStartup(wanted, speakerState, 'waiting');
-          // Wait (bounded) for the page's own capture: live, failed, ended by the firmware, or never
-          // requested. A pending request, such as the macOS permission prompt, gets longer.
+          // Wait (bounded) for the page's own capture, requested or re-enabled: live, failed, ended by
+          // the firmware, or never started. A pending request, such as the macOS permission prompt, gets longer.
           const started = Date.now();
           // The firmware ends a failed attempt (a failed capture or audio answer) with this dialog,
           // shown before it mutes. Only a dialog opened during this attempt counts: one still open
@@ -893,7 +898,8 @@ function installAudioRouting(bridge) {
           while (!outcome) {
             await sleep(100);
             if (!fresh()) return;
-            const capture = attempt.capture;
+            // A capture requested during the attempt replaces a re-enabled one.
+            const capture = attempt.capture ||= reenabled();
             failureShown();
             if (attempt.failed) outcome = attempt.failed;
             else if (capture?.state === 'live' && !capture.stopped) outcome = 'applied';
