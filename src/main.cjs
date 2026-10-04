@@ -321,6 +321,29 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
+  if (!consoleWindow) {
+    // A reload or sign-in replaces the page: mute until the new page confirms its speaker,
+    // and ignore late reports from the old page. Same-document changes keep the page.
+    /** @type {{ready: boolean} | null} */
+    let leaving = null;
+    win.webContents.on('did-start-navigation', details => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      leaving ||= { ready: entry.audio.ready };
+      entry.audio.ready = false;
+      entry.audio.status = null;
+      applyMute(entry);
+    });
+    win.webContents.on('did-navigate', () => { leaving = null; });
+    // A navigation that never committed (blocked, aborted, no content) keeps the old page; route it again.
+    win.webContents.on('did-stop-loading', () => {
+      const previous = leaving;
+      leaving = null;
+      if (!previous?.ready || win.isDestroyed()) return;
+      entry.audio.ready = true;
+      entry.audio.route = null;
+      syncAudio();
+    });
+  }
   handleAppShortcuts(win.webContents);
   win.webContents.on('before-input-event', (_event, input) => {
     const action = keyboardAction(config.keyboard, input);

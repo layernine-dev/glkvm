@@ -31,6 +31,34 @@ async function waitFor(condition) {
   }
   throw new Error('Timed out waiting for application state.');
 }
+// Failure diagnostics only: a bounded, timestamped log of focus and activation
+// events, printed with the window and menu state when the test fails.
+const started = Date.now();
+/** @type {string[]} */
+const focusEvents = [];
+/** @param {string} name @param {Electron.BrowserWindow} [win] */
+const logFocus = (name, win) => {
+  focusEvents.push(`+${Date.now() - started}ms ${name}${win ? ` #${win.id} ${JSON.stringify(win.isDestroyed() ? '(destroyed)' : win.getTitle())}` : ''}`);
+  if (focusEvents.length > 200) focusEvents.shift();
+};
+let appActive = /** @type {boolean | null} */ (null);
+app.on('did-become-active', () => { appActive = true; logFocus('app did-become-active'); });
+app.on('did-resign-active', () => { appActive = false; logFocus('app did-resign-active'); });
+app.on('activate', () => logFocus('app activate'));
+app.on('browser-window-focus', (_event, win) => logFocus('window focus', win));
+app.on('browser-window-blur', (_event, win) => logFocus('window blur', win));
+function focusDiagnostics() {
+  try {
+    const focused = BrowserWindow.getFocusedWindow();
+    return JSON.stringify({
+      appActive, appHidden: process.platform === 'darwin' ? app.isHidden() : null,
+      focusedWindow: focused ? { id: focused.id, title: focused.getTitle() } : null,
+      windows: BrowserWindow.getAllWindows().map(win => ({ id: win.id, title: win.getTitle(), visible: win.isVisible(), minimized: win.isMinimized(), focusable: win.isFocusable(), focused: win.isFocused() })),
+      menu: Menu.getApplicationMenu()?.items.map(item => ({ label: item.label, items: (item.submenu?.items || []).slice(0, 40).map(child => child.label) })) ?? null,
+      events: focusEvents,
+    }, null, 2);
+  } catch (error) { return `Diagnostics unavailable: ${error}`; }
+}
 /** @param {string} label */
 function command(label) {
   const menus = Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []) || [];
@@ -375,6 +403,6 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(globalShortcut.isRegistered('CommandOrControl+Q'), false);
     console.log('PASS: local close and quit shortcuts, app startup, separate login and automatic clean reconnect, isolated settings bridge, integrated options without reload or window replacement, restored bounds, local connection shortcuts, saved settings, live mode/name changes, rejected invalid save, connection removal');
     app.exit(0);
-  } catch (error) { console.error(error); app.exit(1); }
+  } catch (error) { console.error(error); console.error('Focus diagnostics:', focusDiagnostics()); app.exit(1); }
   finally { server.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });

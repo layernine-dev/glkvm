@@ -58,8 +58,26 @@ const vendorScript = `<script>
     };
   }
   window.delaySinks = ms => { window.sinkDelay = ms; };
+  // Test control: players the page starts at load, before its first route arrives.
+  if (localStorage.getItem('fixture-early-audio')) {
+    localStorage.removeItem('fixture-early-audio');
+    const player = (attached, autoplay) => {
+      const audio = document.createElement('audio'); audio.autoplay = autoplay;
+      if (attached) document.body.append(audio);
+      audio.srcObject = window.toneStream();
+      audio.addEventListener('play', () => { audio.sinkAtPlay ??= audio.sinkId; });
+      return audio;
+    };
+    const video = document.createElement('video'); document.body.append(video);
+    video.srcObject = new MediaStream(document.querySelector('#stream-video').srcObject.getVideoTracks());
+    window.early = { attached: player(true, false), detached: player(false, false), paused: player(true, false), autoplay: player(true, true), video, results: {} };
+    for (const name of ['attached', 'detached', 'paused', 'video']) window.early[name].play().then(() => 'playing', error => error.name).then(value => { window.early.results[name] = value; });
+    window.early.paused.pause();
+  }
 </script></body>`;
-const server = createServer((_req, res) => {
+const server = createServer((req, res) => {
+  // A navigation that never commits: the current page stays.
+  if (req.url === '/no-content') { res.statusCode = 204; res.end(); return; }
   res.setHeader('content-type', 'text/html');
   res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replace('<script>', '<script>localStorage.setItem("fixture-auth", "true");').replace('</body>', vendorScript));
 });
@@ -457,10 +475,67 @@ server.listen(0, '127.0.0.1', async () => {
     await save(value => { value.devices[0].audio.background.output = pick(speaker2); });
     await waitFor(() => status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'speaker restored after the race');
 
+    // A same-document change keeps the page and its confirmed speaker.
+    const confirmed = /** @type {import('../src/audio.cjs').AudioStatus} */ (status(first));
+    await run(first, "location.hash = '/same-document'");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.deepEqual([first.webContents.isAudioMuted(), status(first)], [false, confirmed], 'A same-document change keeps the window audible');
+
+    // A reload replaces the page: muted from the start of the navigation until the new page
+    // confirms its speaker, and a late confirmation from the old page is ignored. The new
+    // page's first route is held back, so the players it starts at load have to wait for it.
+    /** @type {unknown[][]} */
+    const heldRoutes = [];
+    contents.send = (channel, ...args) => { if (channel === 'glkvm:audio-route') heldRoutes.push(args); else send.call(contents, channel, ...args); };
+    /** @type {boolean[]} */
+    const navigationMutes = [];
+    /** @type {string[]} */
+    const reloadLeaks = [];
+    const reloaded = () => (status(first)?.generation ?? 0) > confirmed.generation && status(first)?.outputState === 'ok';
+    /** @type {ReturnType<typeof setInterval> | undefined} */
+    let watchReload;
+    contents.once('did-start-navigation', () => {
+      navigationMutes.push(contents.isAudioMuted());
+      ipcMain.emit('glkvm:audio-status', { sender: contents, senderFrame: contents.mainFrame }, confirmed);
+      navigationMutes.push(contents.isAudioMuted());
+      watchReload = setInterval(() => { if (!contents.isAudioMuted() && !reloaded()) reloadLeaks.push(JSON.stringify(status(first))); }, 5);
+    });
+    await run(first, "localStorage.setItem('fixture-early-audio', 'true')");
+    contents.reload();
+    await waitFor(() => heldRoutes.length > 0, 'held route for the new page');
+    await waitFor(() => run(first, "window.early?.results.video === 'playing'"), 'video-only player started before the route');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      assert.deepEqual(navigationMutes, [true, true], 'Muted when the navigation starts; the old page cannot unmute it');
+      assert.equal(contents.isAudioMuted(), true, 'Muted until the new page confirms its speaker');
+      assert.deepEqual(await run(first, "['attached', 'detached', 'paused'].map(name => [window.early.results[name], window.early[name].paused, window.early[name].sinkAtPlay])"),
+        [[undefined, true, undefined], [undefined, true, undefined], [undefined, true, undefined]], 'Audible players wait for the first route, attached or detached');
+    } finally {
+      contents.send = send;
+      for (const args of heldRoutes) send.call(contents, 'glkvm:audio-route', ...args);
+    }
+    await waitFor(() => reloaded() && !contents.isAudioMuted(), 'new page confirmed its speaker');
+    clearInterval(watchReload);
+    assert.deepEqual(reloadLeaks, [], 'Muted throughout the reload');
+    const reloadSpeaker = status(first)?.output;
+    assert.ok(outputs.some(output => output.deviceId === reloadSpeaker));
+    await waitFor(() => run(first, "window.early.results.attached === 'playing' && window.early.results.detached === 'playing' && window.early.results.paused !== undefined"), 'early players settled');
+    assert.deepEqual(await run(first, "['attached', 'detached'].map(name => [window.early.results[name], window.early[name].sinkAtPlay, window.early[name].sinkId])"),
+      [['playing', reloadSpeaker, reloadSpeaker], ['playing', reloadSpeaker, reloadSpeaker]], 'Early audible players start only on the selected speaker');
+    assert.deepEqual(await run(first, "[window.early.results.paused, window.early.paused.paused, window.early.paused.sinkAtPlay]"), ['AbortError', true, undefined], 'A pause before the route cancels the waiting play()');
+    await waitFor(() => run(first, `!window.early.autoplay.paused && window.early.autoplay.sinkId === ${JSON.stringify(reloadSpeaker)}`), 'native autoplay routed');
+    assert.equal(await run(first, '!window.early.video.paused'), true, 'The video-only player keeps playing');
+
+    // A navigation that never commits keeps the old page, which is routed again.
+    const kept = /** @type {number} */ (status(first)?.generation);
+    await run(first, "window.oldPage = true; location.href = '/no-content'");
+    await waitFor(() => (status(first)?.generation ?? 0) > kept && status(first)?.outputState === 'ok' && !contents.isAudioMuted(), 'old page routed again after an uncommitted navigation');
+    assert.equal(await run(first, 'window.oldPage'), true, 'The page was kept');
+
     await run(settings, "document.querySelector('#connections-tab').click()");
     await waitFor(() => run(settings, `document.querySelector('.audio-foreground-input').textContent.includes(${JSON.stringify(mic1.label)})`), 'settings device names');
     if (evidence) fs.writeFileSync(path.join(evidence, 'settings-audio.png'), (await settings.webContents.capturePage()).toPNG());
-    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable and immediate silence for an unresolved device during a pending device request, speaker lost during the device check applies nothing (no system default) and stays muted');
+    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable and immediate silence for an unresolved device during a pending device request, speaker lost during the device check applies nothing (no system default) and stays muted, same-document changes stay audible, reload muted from navigation start with stale old-page confirmations ignored, early attached/detached players wait for the delayed first route and start on its speaker, pause cancels a waiting play, native autoplay routed, video-only fast path, uncommitted navigation re-routes the kept page');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Statuses:', JSON.stringify([...statuses]));
