@@ -1,5 +1,6 @@
 {
   "baseCommit": "8b428a0a5e7924ff95a0c4f9064ff12cc4853050",
   "baseVersion": "0.1.21",
-  "repository": "layernine-dev/glkvm"
+  "repository": "layernine-dev/glkvm",
+  "updatesEnabled": false
 }

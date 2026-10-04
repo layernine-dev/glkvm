@@ -33,7 +33,7 @@ function releaseInfo() {
   const distance = history.indexOf(config.baseCommit);
   if (distance < 0) throw new Error('Release base is missing from first-parent history; fetch full history.');
   const version = versionAt(config.baseVersion, distance);
-  return { sha, version, tag: `v${version}`, repository: config.repository };
+  return { sha, version, tag: `v${version}`, repository: config.repository, updatesEnabled: config.updatesEnabled === true };
 }
 
 function checkRelease() {
@@ -80,12 +80,12 @@ function api(endpoint, body) {
 function publishRelease() {
   const info = JSON.parse(fs.readFileSync(path.join(output, 'release.json'), 'utf8'));
   const expected = releaseInfo();
-  if (info.sha !== expected.sha || info.tag !== expected.tag || info.repository !== config.repository) throw new Error('Release manifest does not match this checkout.');
+  if (info.sha !== expected.sha || info.tag !== expected.tag || info.repository !== config.repository || info.updatesEnabled !== expected.updatesEnabled) throw new Error('Release manifest does not match this checkout.');
   const archive = path.join(output, info.archive);
   if (path.dirname(archive) !== output || createHash('sha256').update(fs.readFileSync(archive)).digest('hex') !== info.sha256) throw new Error('Release archive checksum mismatch.');
   const repo = `repos/${config.repository}`;
   const metadata = api(repo);
-  if (metadata.private) throw new Error('Public updates require a public GitHub repository. No release was published.');
+  if (metadata.private && info.updatesEnabled) throw new Error('Public updates require a public GitHub repository. Disable updates for private releases.');
   // Fetch all releases so retries can find an older draft without changing it.
   const releases = JSON.parse(run('gh', ['api', `${repo}/releases?per_page=100`, '--paginate', '--slurp'])).flat();
   let release = releases.find((/** @type {any} */ item) => item.tag_name === info.tag);
@@ -112,7 +112,7 @@ function publishRelease() {
   }
   const published = api(`${repo}/releases/${release.id}`);
   if (published.draft || published.prerelease || api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Published release/tag verification failed.');
-  console.log(`Verified public release: ${published.html_url}`);
+  console.log(`Verified ${metadata.private ? 'private' : 'public'} release: ${published.html_url}`);
 }
 /** @param {string} a @param {string} b */
 function compareVersions(a, b) {

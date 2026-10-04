@@ -49,7 +49,7 @@ async function buildApp({ tests = false, release = false, appVersion = version }
       const file = path.join(buildPath, 'package.json');
       const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (tests) manifest.main = 'test/bootstrap.cjs';
-      manifest.glkvmUpdates = release;
+      manifest.glkvmUpdates = release && require('../release.json').updatesEnabled === true;
       fs.writeFileSync(file, JSON.stringify(manifest));
     }],
     afterPrune: [({ buildPath }) => collectRuntimeLicenses(buildPath, path.join(buildPath, '../licenses'))],

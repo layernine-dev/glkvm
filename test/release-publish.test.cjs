@@ -9,8 +9,9 @@ const config = require('../release.json');
 const hash = (/** @type {Buffer} */ value) => createHash('sha256').update(value).digest('hex');
 
 /** Exercise the real publisher against a synthetic GitHub/CLI boundary. No uploads.
- * @param {import('node:test').TestContext} t */
-function fixture(t) {
+ * @param {import('node:test').TestContext} t @param {boolean} [updatesEnabled] */
+function fixture(t, updatesEnabled = config.updatesEnabled) {
+  const releaseConfig = { ...config, updatesEnabled };
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-publish-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const output = path.join(directory, 'dist/release');
@@ -19,7 +20,7 @@ function fixture(t) {
   const bytes = Buffer.from('synthetic signed/notarized artifact');
   fs.writeFileSync(path.join(output, archive), bytes);
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), `${hash(bytes)}  ${archive}\n`);
-  const info = { sha, version: '0.1.22', tag: 'v0.1.22', repository: config.repository, archive, sha256: hash(bytes), electron: '44.5.1' };
+  const info = { sha, version: '0.1.22', tag: 'v0.1.22', repository: config.repository, updatesEnabled, archive, sha256: hash(bytes), electron: '44.5.1' };
   fs.writeFileSync(path.join(output, 'release.json'), JSON.stringify(info));
   /** @type {any} */
   const state = { release: null, uploads: 0, publishes: 0, private: false, corruptDigest: false };
@@ -55,7 +56,7 @@ function fixture(t) {
     module: loaded, __dirname: path.join(directory, 'scripts'), process, console: { log() {} },
     require: (/** @type {string} */ name) => {
       if (name === 'node:child_process') return { spawnSync };
-      if (name === '../release.json') return config;
+      if (name === '../release.json') return releaseConfig;
       if (name.startsWith('./')) return {};
       return require(name);
     },
@@ -83,14 +84,27 @@ test('bad uploaded digests leave the release unpublished', t => {
   assert.equal(state.publishes, 0);
 });
 
-test('private repositories and modified artifacts cannot publish', t => {
-  const { state, publisher, output, archive } = fixture(t);
+test('private repositories publish with app updates disabled', t => {
+  const { state, publisher } = fixture(t);
   state.private = true;
-  assert.throws(() => publisher.publishRelease(), /public GitHub repository/);
-  assert.equal(state.release, null);
-  state.private = false;
+  publisher.publishRelease();
+  assert.equal(state.release.draft, false);
+  assert.equal(state.publishes, 1);
+  assert.equal(publisher.alreadyPublished(), true);
+});
+
+test('modified artifacts cannot publish', t => {
+  const { state, publisher, output, archive } = fixture(t);
   fs.writeFileSync(path.join(output, archive), 'changed');
   assert.throws(() => publisher.publishRelease(), /checksum mismatch/);
+  assert.equal(state.uploads, 0);
+});
+
+test('private releases cannot accidentally enable the public updater', t => {
+  const { state, publisher } = fixture(t, true);
+  state.private = true;
+  assert.throws(() => publisher.publishRelease(), /Disable updates for private releases/);
+  assert.equal(state.release, null);
   assert.equal(state.uploads, 0);
 });
 

@@ -33,6 +33,8 @@
   identifiers and executable UUID derivation. Tests must never enable the updater.
 - Every merge to main is a release after successful CI. CI assigns the version;
   do not bump package.json in ordinary PRs or introduce prerelease channels.
+- Keep the repository and releases private, with app updates disabled. Do not
+  change repository visibility or add branch protection without user instruction.
 - CI runs trusted repository pushes on neo under its shared test lock, with at
   most two compiler jobs. Do not add untrusted fork execution on that runner.
 - Keep release credentials out of Git. Preserve third-party license texts in

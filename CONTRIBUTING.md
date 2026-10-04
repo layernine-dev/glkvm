@@ -69,7 +69,8 @@ ordinary commands on their own Mac. Compiler parallelism is capped at two jobs.
   and dependency PRs, becomes a release after successful CI.
 - Do not force-push main or rewrite the release base in `release.json`.
 - Official signing/notarization credentials are needed only on the release
-  runner. Local builds and GUI fixtures have automatic updates disabled.
+  runner. Releases stay in this private repository. Automatic app updates are
+  disabled in every build until a suitable distribution service is chosen.
 
 See [release operations](docs/releases.md) for provisioning and recovery.
 
