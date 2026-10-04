@@ -437,6 +437,10 @@ function installAudioRouting(bridge) {
   /** @type {(value?: unknown) => void} */
   let routeArrived = () => {};
   const firstRoute = new Promise(resolve => { routeArrived = resolve; });
+  /** @type {() => void} */
+  let routeUpdated = () => {};
+  /** @type {Promise<void>} */
+  let nextRoute = new Promise(resolve => { routeUpdated = resolve; });
 
   // Output: every media element and page AudioContext follows the selected sink.
   /** @typedef {(HTMLMediaElement | AudioContext) & {setSinkId(id: string | {type: 'none'}): Promise<void>, sinkId: unknown}} Sink */
@@ -497,7 +501,7 @@ function installAudioRouting(bridge) {
   const silent = target => {
     if (!(target instanceof HTMLMediaElement)) return target.state === 'closed';
     const source = srcObject.get?.call(target);
-    return source instanceof NativeMediaStream && !source.getAudioTracks().length;
+    return source instanceof NativeMediaStream && !source.getAudioTracks().some(track => track.readyState === 'live');
   };
   /** An unresolved speaker (null) is never applied, not even as the system default.
    * The main process keeps the window muted while it is unresolved. */
@@ -539,34 +543,59 @@ function installAudioRouting(bridge) {
     if (!quiet && outputState === 'ok') { outputState = 'pending'; report(); }
     void refreshOutput();
   };
-  /** @type {WeakMap<HTMLMediaElement, object>} */
+  /** @type {WeakMap<HTMLMediaElement, {cancel(): void, wake(): void}>} */
   const pendingPlays = new WeakMap();
   /** @this {HTMLMediaElement} */
   const gatedPlay = function play() {
     const target = /** @type {Sink} */ (/** @type {unknown} */ (this));
     register(this);
     // A player without audio starts at once, even before the first route.
-    if (route ? routed(target) : silent(target)) return nativePlay.call(this);
+    if (silent(target) || sinkMatches(target)) return nativePlay.call(this);
     // Start only on the selected speaker, following route changes while waiting; never on the system default.
-    const token = {};
+    /** @type {() => void} */
+    let cancel = () => {};
+    const cancelled = new Promise(resolve => { cancel = () => resolve(undefined); });
+    /** @type {() => void} */
+    let changed = () => {};
+    /** @type {Promise<void>} */
+    let sourceChanged = new Promise(resolve => { changed = resolve; });
+    const token = { cancel, wake() {
+      const previous = changed;
+      sourceChanged = new Promise(resolve => { changed = resolve; });
+      previous();
+    } };
+    pendingPlays.get(this)?.cancel();
     pendingPlays.set(this, token);
     return (async () => {
-      await firstRoute;
-      if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
-      try { while (!routed(target)) await applySink(target); } catch {
+      // Native track termination and another frame's track methods can bypass
+      // page hooks without emitting removetrack. Observe only while play waits.
+      const sourceWatch = setInterval(() => { if (silent(target)) token.wake(); }, 250);
+      try {
+        while (!silent(target) && !sinkMatches(target)) {
+          // An initial or superseding unresolved route keeps the window muted,
+          // but must not let the player start on the system default either.
+          await Promise.race([!route ? firstRoute : route.output === null ? nextRoute : applySink(target), cancelled, sourceChanged]);
+          if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
+        }
+      } catch {
+        if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
         if (pendingPlays.get(this) === token) pendingPlays.delete(this);
         throw new DOMException('The selected speaker could not be used.', 'NotAllowedError');
-      }
+      } finally { clearInterval(sourceWatch); }
       if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
       pendingPlays.delete(this);
       return nativePlay.call(this);
     })();
   };
   HTMLMediaElement.prototype.play = gatedPlay;
-  HTMLMediaElement.prototype.pause = function pause() { pendingPlays.delete(this); return nativePause.call(this); };
+  HTMLMediaElement.prototype.pause = function pause() { pendingPlays.get(this)?.cancel(); pendingPlays.delete(this); return nativePause.call(this); };
   Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
     ...srcObject,
-    set(value) { /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value); register(this); },
+    set(value) {
+      /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value);
+      register(this);
+      pendingPlays.get(this)?.wake();
+    },
   });
   // A player gains audio when the page adds a remote audio track to its stream.
   const nativeAddTrack = MediaStream.prototype.addTrack;
@@ -791,6 +820,9 @@ function installAudioRouting(bridge) {
     const previous = route;
     route = { inputAllowed: next.inputAllowed === true, input: typeof next.input === 'string' ? next.input : null, inputMissing: next.inputMissing === true, output: typeof next.output === 'string' ? next.output : null, generation: next.generation };
     const current = route;
+    const updated = routeUpdated;
+    nextRoute = new Promise(resolve => { routeUpdated = resolve; });
+    updated();
     routeArrived();
     // A different speaker is unconfirmed until applied; the same confirmed speaker stays valid.
     if (!previous || previous.output !== route.output || outputState !== 'ok') { outputState = 'pending'; void refreshOutput(); }
