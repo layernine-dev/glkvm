@@ -6,7 +6,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 concurrency:
   group: dependency-upgrades
   cancel-in-progress: false
@@ -26,7 +25,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run deps:update
-      - name: Open or refresh dependency PR and dispatch its macOS checks
+      - name: Open or refresh dependency PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/dependency-pr.cjs

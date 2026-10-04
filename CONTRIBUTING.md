@@ -55,7 +55,9 @@ python3 "$GLKVM_TEST_LOCK" /bin/zsh -lc \
 ```
 
 CI receives the existing lock script's path through the `GLKVM_TEST_LOCK`
-repository secret. When running the command above manually on a shared runner,
+repository secret. Trusted fork PRs use the runner-local
+`~/.config/glkvm/ci.env` fallback, which exports `GLKVM_TEST_LOCK` without putting
+the private runner path in Git. When running the command above manually on a shared runner,
 set that environment variable to the runner's local lock script first. Other
 developers can use the ordinary commands on their own Mac. Compiler parallelism
 is capped at two jobs.
@@ -63,17 +65,20 @@ is capped at two jobs.
 ## Pull requests and releases
 
 - Create a branch, make a focused change, and open a PR against `main`.
-- Trusted collaborators' pushes run the macOS checks on the macOS runner. The same SHA's
-  push checks appear on its PR; there is no duplicate `pull_request` execution.
-- Forks do not execute on the maintainers' personal runner. A maintainer reviews
-  a contribution before importing it to a trusted branch for these tests.
+- PRs authored by `keeperxy` or `uwe-schwarz` run the macOS checks automatically,
+  including trusted fork PRs. Both the PR author and triggering actor must be on
+  this list. Other PRs and ordinary branch pushes do not start macOS CI.
+- The repository Actions actor policy enforces the same two accounts outside
+  the PR-controlled workflow, so changing workflow YAML cannot bypass it.
+- Maintainers may dispatch CI manually for a reviewed repository branch. Main
+  pushes run checks and the release pipeline.
 - Do not bump `package.json` for each PR. CI derives a deterministic patch
   version from main's first-parent history; every merge, including documentation
   and dependency PRs, becomes a release after successful CI.
 - Do not force-push main or rewrite the release base in `release.json`.
 - Official signing/notarization credentials are needed only on the release
-  runner. Releases stay in this private repository. Automatic app updates are
-  disabled in every build until a suitable distribution service is chosen.
+  runner. Public release bundles enable automatic updates; local builds and GUI
+  fixtures always disable them.
 
 See [release operations](docs/releases.md) for provisioning and recovery.
 
@@ -81,8 +86,9 @@ See [release operations](docs/releases.md) for provisioning and recovery.
 
 The daily dependency workflow runs in GitHub's Linux cloud runner and opens or
 updates `automation/dependencies`. It uses `bun run deps:update` with the existing
-24-hour cooldown, including stable major updates, and explicitly dispatches the
-same macOS checks. It does not auto-merge. Review upstream release notes and the
+24-hour cooldown, including stable major updates. Bot-authored PRs do not start
+macOS CI automatically. A maintainer runs the CI workflow manually for the
+dependency branch before merging. It does not auto-merge. Review upstream release notes and the
 lockfile before merging. Ordinary feature/fix PRs use the committed lockfile.
 
 For a manual dependency upgrade, run `bun run deps:update` and all checks above.

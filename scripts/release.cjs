@@ -85,8 +85,7 @@ function publishRelease() {
   if (path.dirname(archive) !== output || createHash('sha256').update(fs.readFileSync(archive)).digest('hex') !== info.sha256) throw new Error('Release archive checksum mismatch.');
   const repo = `repos/${config.repository}`;
   const metadata = api(repo);
-  if (metadata.private !== true) throw new Error('Releases require a private repository.');
-  if (info.updatesEnabled) throw new Error('Disable updates for private releases.');
+  if (metadata.private !== false) throw new Error('Releases require a public repository.');
   // Fetch all releases so retries can find an older draft without changing it.
   const releases = JSON.parse(run('gh', ['api', `${repo}/releases?per_page=100`, '--paginate', '--slurp'])).flat();
   let release = releases.find((/** @type {any} */ item) => item.tag_name === info.tag);
@@ -115,14 +114,14 @@ function publishRelease() {
     if (!asset || asset.size !== fs.statSync(path.join(output, file)).size || asset.digest !== expectedDigest) throw new Error(`Uploaded asset did not verify: ${file}`);
   }
   if (readback.draft) {
-    if (api(repo).private !== true) throw new Error('Releases require a private repository.');
+    if (api(repo).private !== false) throw new Error('Releases require a public repository.');
     if (api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Version tag changed before publication.');
     const newer = releases.some((/** @type {any} */ item) => !item.draft && /^v\d+\.\d+\.\d+$/.test(item.tag_name) && compareVersions(item.tag_name.slice(1), info.version) > 0);
     run('gh', ['api', `${repo}/releases/${release.id}`, '--method', 'PATCH', '--input', '-'], JSON.stringify({ draft: false, make_latest: newer ? 'false' : 'true' }));
   }
   const published = api(`${repo}/releases/${release.id}`);
   if (published.draft || published.prerelease || api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Published release/tag verification failed.');
-  console.log(`Verified private release: ${published.html_url}`);
+  console.log(`Verified public release: ${published.html_url}`);
 }
 /** @param {string} a @param {string} b */
 function compareVersions(a, b) {
@@ -132,7 +131,7 @@ function compareVersions(a, b) {
 }
 function alreadyPublished() {
   const info = releaseInfo();
-  if (api(`repos/${config.repository}`).private !== true) throw new Error('Releases require a private repository.');
+  if (api(`repos/${config.repository}`).private !== false) throw new Error('Releases require a public repository.');
   const releases = JSON.parse(run('gh', ['api', `repos/${config.repository}/releases?per_page=100`, '--paginate', '--slurp'])).flat();
   const release = releases.find((/** @type {any} */ item) => item.tag_name === info.tag && !item.draft);
   if (!release) return false;

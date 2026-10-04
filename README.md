@@ -16,8 +16,9 @@ device as **Device — <name>**. No sharing session starts automatically.
 GLKVM Clean is an independent open-source project under the [MIT license](LICENSE),
 not an official GL.iNet application. See [CONTRIBUTING.md](CONTRIBUTING.md) for
 development and testing and [release operations](docs/releases.md) for CI,
-signing and releases. The repository and releases are currently private;
-automatic app updates are disabled. Official builds target Apple Silicon and
+signing and releases. The repository and releases are public; official
+release builds check for updates automatically. Install the first updater-enabled
+release manually; older installations cannot update themselves. Official builds target Apple Silicon and
 the latest stable macOS.
 
 ## Run and build

@@ -23,7 +23,7 @@ function fixture(t, updatesEnabled = config.updatesEnabled) {
   const info = { sha, version: '0.1.22', tag: 'v0.1.22', repository: config.repository, updatesEnabled, archive, sha256: hash(bytes), electron: '44.5.1' };
   fs.writeFileSync(path.join(output, 'release.json'), JSON.stringify(info));
   /** @type {any} */
-  const state = { release: null, uploads: 0, publishes: 0, private: true, corruptDigest: false, tagSha: null, moveTagOnUpload: false };
+  const state = { release: null, uploads: 0, publishes: 0, private: false, corruptDigest: false, tagSha: null, moveTagOnUpload: false };
   /** @param {string} command @param {string[]} args @param {{input?: string}} options */
   function spawnSync(command, args, options) {
     /** @type {any} */
@@ -87,20 +87,20 @@ test('bad uploaded digests leave the release unpublished', t => {
   assert.equal(state.publishes, 0);
 });
 
-test('private repositories publish with app updates disabled', t => {
+test('public repositories publish updater-enabled releases', t => {
   const { state, publisher } = fixture(t);
-  state.private = true;
+  state.private = false;
   publisher.publishRelease();
   assert.equal(state.release.draft, false);
   assert.equal(state.publishes, 1);
   assert.equal(publisher.alreadyPublished(), true);
 });
 
-test('a public repository cannot receive releases or pass the retry check', t => {
+test('a private repository cannot receive releases or pass the retry check', t => {
   const { state, publisher } = fixture(t);
-  state.private = false;
-  assert.throws(() => publisher.publishRelease(), /require a private repository/);
-  assert.throws(() => publisher.alreadyPublished(), /require a private repository/);
+  state.private = true;
+  assert.throws(() => publisher.publishRelease(), /require a public repository/);
+  assert.throws(() => publisher.alreadyPublished(), /require a public repository/);
   assert.equal(state.release, null);
   assert.equal(state.tagSha, null);
   assert.equal(state.uploads, 0);
@@ -130,10 +130,13 @@ test('modified artifacts cannot publish', t => {
   assert.equal(state.uploads, 0);
 });
 
-test('private releases cannot accidentally enable the public updater', t => {
-  const { state, publisher } = fixture(t, true);
-  state.private = true;
-  assert.throws(() => publisher.publishRelease(), /Disable updates for private releases/);
+test('release metadata cannot disagree with the packaged updater setting', t => {
+  const { state, publisher, output } = fixture(t, false);
+  const file = path.join(output, 'release.json');
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+  manifest.updatesEnabled = true;
+  fs.writeFileSync(file, JSON.stringify(manifest));
+  assert.throws(() => publisher.publishRelease(), /manifest does not match/);
   assert.equal(state.release, null);
   assert.equal(state.uploads, 0);
 });
