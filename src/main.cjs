@@ -15,10 +15,10 @@ const { defaultAudio, resolveDevice, routeFor, mediaPermission, validateDeviceRe
 const { watchCatalog, catalogPath, deviceLabels } = require('./audio-catalog.cjs');
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./device-ids.cjs');
 
-const { keyboardAction } = require('./keyboard.cjs');
+const { keyboardAction, matchesBinding } = require('./keyboard.cjs');
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -33,6 +33,9 @@ let config = defaults();
 /** @type {Electron.BrowserWindow | null} */
 let settingsWindow = null;
 let lastDeviceId = '';
+/** Paused audio switching is app-wide and in memory only, so it ends with the process. */
+let audioSwitchingPaused = false;
+let settingsRecording = false;
 const settingsURL = pathToFileURL(path.join(__dirname, 'settings.html')).href;
 
 function allEntries() { return [...windows.values(), ...consoles.values()]; }
@@ -90,9 +93,21 @@ function updateModeShortcuts() {
     if (globalShortcut.register(accelerator, () => appShortcuts().get(accelerator)?.())) registeredShortcuts.add(accelerator);
   }
 }
-/** @param {Electron.WebContents} contents */
-function handleAppShortcuts(contents) {
+/** The audio switching shortcut works in every app window and mode. A connection page consumes
+ * it itself (see preload.cjs), so held modifiers never reach the remote computer; other windows
+ * drop the key here, except while Settings records a shortcut.
+ * @param {Electron.WebContents} contents @param {boolean} [pageConsumes] */
+function handleAppShortcuts(contents, pageConsumes = false) {
+  /** @type {Set<string>} */
+  const dropped = new Set();
   contents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyUp' && dropped.delete(input.code)) { event.preventDefault(); return; }
+    const recording = settingsRecording && !!settingsWindow && contents === settingsWindow.webContents;
+    if (input.type === 'keyDown' && !recording && matchesBinding(config.keyboard?.pauseAudioSwitching, input)) {
+      if (!input.isAutoRepeat) toggleAudioSwitching();
+      if (!pageConsumes) { event.preventDefault(); dropped.add(input.code); }
+      return;
+    }
     const command = process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta;
     if (!command || input.alt) return;
     const key = input.key.toUpperCase();
@@ -132,6 +147,19 @@ function deviceSender(event) {
 
 /** @param {Entry} entry */
 function isViewer(entry) { return windows.get(entry.device.id) === entry; }
+/** While audio switching is paused, each viewer keeps the profile it had when the pause began.
+ * @param {Entry} entry */
+function usesForeground(entry) {
+  return audioSwitchingPaused ? isViewer(entry) && entry.pausedForeground === true : isForeground(entry);
+}
+/** Pausing keeps each viewer's selected profile, not its resolved devices: device discovery,
+ * permissions and mute continue. Resuming follows native focus again at once. */
+function toggleAudioSwitching() {
+  audioSwitchingPaused = !audioSwitchingPaused;
+  for (const entry of windows.values()) entry.pausedForeground = audioSwitchingPaused ? isForeground(entry) : null;
+  installMenu();
+  syncAudio();
+}
 /** The focused, visible, non-minimized viewer uses the foreground profile; all others use background.
  * @param {Entry} entry */
 function isForeground(entry) {
@@ -159,7 +187,7 @@ function sessionSalt(ses) {
 /** @param {Entry} entry @returns {import('./audio.cjs').AudioRoute} */
 function currentRoute(entry) {
   const resolution = { origin: entry.device.origin, salt: entry.audio.salt, reported: entry.audio.devices, catalog: catalog || [] };
-  return routeFor(entry.device.audio || defaultAudio(), isForeground(entry), (choice, kind) => resolveDevice(choice, kind, resolution));
+  return routeFor(entry.device.audio || defaultAudio(), usesForeground(entry), (choice, kind) => resolveDevice(choice, kind, resolution));
 }
 /** Settings from older versions stored a page deviceId. Replace it with the native device
  * whose hash it exactly is; otherwise keep it, unresolved. Saved with the next settings change. */
@@ -235,7 +263,7 @@ function audioSnapshot() {
   for (const entry of windows.values()) {
     if (entry.window.isDestroyed()) continue;
     const route = currentRoute(entry);
-    connections[entry.device.id] = { foreground: isForeground(entry), preparing: (route.inputMissing || route.output === null) && !entry.audio.salt, status: entry.audio.status, startup: entry.audio.startup };
+    connections[entry.device.id] = { foreground: usesForeground(entry), preparing: (route.inputMissing || route.output === null) && !entry.audio.salt, status: entry.audio.status, startup: entry.audio.startup };
   }
   /** @param {'input' | 'output'} kind */
   const list = kind => {
@@ -243,7 +271,7 @@ function audioSnapshot() {
     const labels = deviceLabels(devices);
     return devices.map(device => ({ uid: device.uid, label: labels.get(device.uid) || device.name, alive: device.alive }));
   };
-  return { catalog: catalog ? { inputs: list('input'), outputs: list('output') } : null, microphoneAccess: systemPreferences.getMediaAccessStatus('microphone'), connections };
+  return { catalog: catalog ? { inputs: list('input'), outputs: list('output') } : null, microphoneAccess: systemPreferences.getMediaAccessStatus('microphone'), audioSwitchingPaused, connections };
 }
 let settingsAudioQueued = false;
 function sendSettingsAudio() {
@@ -303,7 +331,8 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
+  // A viewer opened while audio switching is paused uses the background profile until resumed.
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
   updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
@@ -344,7 +373,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       syncAudio();
     });
   }
-  handleAppShortcuts(win.webContents);
+  handleAppShortcuts(win.webContents, !consoleWindow);
   win.webContents.on('before-input-event', (_event, input) => {
     const action = keyboardAction(config.keyboard, input);
     const localAction = !!action && !consoleWindow && entry.streaming && entry.playerFocused && entry.controlEnabled && !entry.moving;
@@ -409,7 +438,7 @@ function showSettings() {
   handleAppShortcuts(settingsWindow.webContents);
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWindow.webContents.on('will-navigate', event => event.preventDefault());
-  settingsWindow.on('closed', () => { settingsWindow = null; updateCatalog(); });
+  settingsWindow.on('closed', () => { settingsWindow = null; settingsRecording = false; updateCatalog(); });
   updateCatalog();
   settingsWindow.on('focus', installMenu);
   settingsWindow.once('ready-to-show', () => settingsWindow?.show());
@@ -428,7 +457,10 @@ function installMenu() {
       { label: 'Device Settings…', type: 'checkbox', checked: !!entry?.options, accelerator: 'CmdOrCtrl+Shift+O', enabled: !!config.devices.length, click: toggleDeviceSettings },
       { label: 'Move Window Mode', accelerator: 'CmdOrCtrl+Shift+M', type: 'checkbox', enabled: !!clean, checked: !!clean && (!entry.controlEnabled || entry.moving), click: () => {
         if (clean) toggleMode(entry);
-      } }, { type: 'separator' },
+      } },
+      // Shown, not registered: the key is handled in every window, including view-only and Settings.
+      { label: `Pause Audio Switching${config.keyboard?.pauseAudioSwitching ? ` (${config.keyboard.pauseAudioSwitching.label})` : ''}`, type: 'checkbox', checked: audioSwitchingPaused, click: toggleAudioSwitching },
+      { type: 'separator' },
       { label: 'Reload', accelerator: 'CmdOrCtrl+R', enabled: !!entry, click: () => { if (entry) { releaseInput(entry); entry.window.webContents.reload(); } } }, { role: 'close' },
     ] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -467,12 +499,12 @@ function installMenu() {
       { role: 'togglefullscreen' }, { type: 'separator' }, { role: 'front' },
     ] },
     { label: 'Help', submenu: [{ label: 'Using GLKVM Clean', click: () => {
-      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. No screen-sharing session is started by this app.' });
+      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. The Pause Audio Switching shortcut (⇧⌘A by default, set in Settings → Keyboard) keeps each connection on its current focused or background audio until you press it again. No screen-sharing session is started by this app.' });
     } }] },
   ]));
 }
 
-/** @param {Electron.IpcMainInvokeEvent} event */
+/** @param {Electron.IpcMainInvokeEvent | Electron.IpcMainEvent} event */
 function requireSettingsSender(event) {
   if (!settingsWindow || event.sender !== settingsWindow.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== settingsURL) throw new Error('Settings access denied.');
 }
@@ -512,6 +544,11 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
     return { ok: true, config: publicConfig(config) };
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
   finally { savingSettings = false; }
+});
+// The shortcut recorder receives every key, including the audio switching shortcut.
+ipcMain.on('glkvm:settings-recording', (event, recording) => {
+  try { requireSettingsSender(event); } catch { return; }
+  settingsRecording = recording === true;
 });
 ipcMain.handle('glkvm:settings-audio', event => {
   requireSettingsSender(event);
