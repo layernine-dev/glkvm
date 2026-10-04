@@ -99,6 +99,8 @@ server.listen(0, '127.0.0.1', async () => {
     await new Promise(resolve => setTimeout(resolve, 1100));
     assert.equal(await login.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts')"), '1', 'Rejected passwords are not retried or reloaded');
     command('Settings…');
+    const updateItem = Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Check for Updates…');
+    assert.equal(updateItem?.enabled, false, 'Packaged GUI fixtures must never enable production updates');
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'));
     const passwordSettings = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'GLKVM Clean Settings');
     assert.ok(passwordSettings);

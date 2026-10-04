@@ -12,8 +12,8 @@ function codesign(args) {
   return result.stdout + result.stderr;
 }
 
-/** @param {string} appPath @param {string} signingIdentity */
-function verifySignature(appPath, signingIdentity) {
+/** @param {string} appPath @param {string} signingIdentity @param {boolean} [release] */
+function verifySignature(appPath, signingIdentity, release = false) {
   codesign(['--verify', '--deep', '--strict', '--verbose=2', appPath]);
   const frameworks = path.join(appPath, 'Contents/Frameworks');
   const helpers = fs.readdirSync(frameworks).filter(name => name.endsWith('.app'));
@@ -34,9 +34,14 @@ function verifySignature(appPath, signingIdentity) {
     if (bundle === appPath ? identifier !== 'dev.layernine.glkvm-clean' : !identifier?.startsWith('dev.layernine.glkvm-clean.helper')) {
       throw new Error(`Unexpected bundle identifier: ${bundle}`);
     }
-    if (!requirement.includes(`identifier "${identifier}"`) || !requirement.includes(`certificate leaf[subject.CN] = "${signingIdentity}"`) || /designated =>.*cdhash/.test(requirement)) {
+    const team = details.match(/^TeamIdentifier=(.+)$/m)?.[1];
+    const stableSigner = release
+      ? requirement.includes('anchor apple generic') && requirement.includes('1.2.840.113635.100.6.1.13') && requirement.includes(`certificate leaf[subject.OU] = ${team}`)
+      : requirement.includes(`certificate leaf[subject.CN] = "${signingIdentity}"`);
+    if (!requirement.includes(`identifier "${identifier}"`) || !stableSigner || /designated =>.*cdhash/.test(requirement)) {
       throw new Error(`The code identity is not stable across updates: ${bundle}`);
     }
+    if (release && (!signingIdentity.startsWith('Developer ID Application: ') || !/^Timestamp=.+$/m.test(details))) throw new Error(`Release requires Developer ID and secure timestamp: ${bundle}`);
   }
   // The device catalog only reads CoreAudio properties: no entitlements.
   const catalog = path.join(appPath, 'Contents/Resources', catalogName);
@@ -45,6 +50,7 @@ function verifySignature(appPath, signingIdentity) {
   if (!details.includes(`Authority=${signingIdentity}\n`) || !/^Identifier=dev\.layernine\.glkvm-clean\.audio-catalog$/m.test(details) || !/^CodeDirectory .*flags=.*\bruntime\b/m.test(details) || /<key>/.test(entitlements)) {
     throw new Error(`Unexpected signature for the audio device catalog: ${catalog}`);
   }
+  if (release && !/^Timestamp=.+$/m.test(details)) throw new Error('The audio catalog has no secure timestamp.');
   console.log(`Verified signed app, ${helpers.length} helpers and the audio device catalog: ${signingIdentity}`);
 }
 
@@ -53,7 +59,7 @@ if (require.main === module) {
   const appPath = process.argv[2];
   if (!appPath) { console.error('Usage: node scripts/verify-signature.cjs /path/to/GLKVM\\ Clean.app'); process.exitCode = 1; }
   else {
-    try { verifySignature(path.resolve(appPath), resolveSigningIdentity()); }
+    try { const release = process.argv.includes('--release'); verifySignature(path.resolve(appPath), resolveSigningIdentity(release ? 'release' : 'development'), release); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
   }
 }

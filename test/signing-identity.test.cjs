@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { selectSigningIdentity } = require('../scripts/signing-identity.cjs');
 
-const uwe = 'Apple Development: Uwe Schwarz (54988A349V)';
+const alice = 'Apple Development: Alice Example (AAAAAAAAAA)';
 const bob = 'Apple Development: Bob Example (BBBBBBBBBB)';
 /** @param {...[string, string]} entries */
 function listing(...entries) {
@@ -12,18 +12,18 @@ function listing(...entries) {
 
 test('the only valid Apple Development identity is selected automatically', () => {
   assert.equal(selectSigningIdentity(listing(['A', bob]), undefined), bob);
-  assert.equal(selectSigningIdentity(listing(['A', uwe], ['B', 'Developer ID Application: Uwe Schwarz (TEAM123456)']), undefined), uwe);
+  assert.equal(selectSigningIdentity(listing(['A', alice], ['B', 'Developer ID Application: Alice Example (TEAM123456)']), undefined), alice);
 });
 
 test('an explicit override must exactly match a valid identity', () => {
-  const output = listing(['A', uwe], ['B', bob]);
-  assert.equal(selectSigningIdentity(output, uwe), uwe);
-  assert.throws(() => selectSigningIdentity(output, 'Apple Development: Uwe Schwarz'), /GLKVM_SIGNING_IDENTITY="Apple Development: Uwe Schwarz" is not a valid.*Bob Example/);
-  assert.throws(() => selectSigningIdentity(listing(['A', bob]), uwe), /not a valid/);
+  const output = listing(['A', alice], ['B', bob]);
+  assert.equal(selectSigningIdentity(output, alice), alice);
+  assert.throws(() => selectSigningIdentity(output, 'Apple Development: Alice Example'), /GLKVM_SIGNING_IDENTITY="Apple Development: Alice Example" is not a valid.*Bob Example/);
+  assert.throws(() => selectSigningIdentity(listing(['A', bob]), alice), /not a valid/);
 });
 
 test('missing or ambiguous identities fail instead of signing ad hoc', () => {
   assert.throws(() => selectSigningIdentity('     0 valid identities found\n', undefined), /No signing identity found.*Keychain.*GLKVM_SIGNING_IDENTITY/);
-  assert.throws(() => selectSigningIdentity(listing(['A', uwe], ['B', bob]), undefined), /Multiple signing identities.*Uwe Schwarz.*Bob Example.*GLKVM_SIGNING_IDENTITY/);
-  assert.throws(() => selectSigningIdentity(listing(['A', uwe], ['B', uwe]), undefined), /Several valid certificates/);
+  assert.throws(() => selectSigningIdentity(listing(['A', alice], ['B', bob]), undefined), /Multiple signing identities.*Alice Example.*Bob Example.*GLKVM_SIGNING_IDENTITY/);
+  assert.throws(() => selectSigningIdentity(listing(['A', alice], ['B', alice]), undefined), /Several valid certificates/);
 });

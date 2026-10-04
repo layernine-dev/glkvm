@@ -13,6 +13,13 @@ are retained. App settings (⌘,) remain separate. When sharing the device windo
 its visible device settings are shared too. The menu bar identifies the focused
 device as **Device — <name>**. No sharing session starts automatically.
 
+GLKVM Clean is an independent open-source project under the [MIT license](LICENSE),
+not an official GL.iNet application. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+development and testing and [release operations](docs/releases.md) for CI,
+signing and releases. The repository and releases are currently private;
+automatic app updates are disabled. Official builds target Apple Silicon and
+the latest stable macOS.
+
 ## Run and build
 
 ```sh
@@ -31,8 +38,9 @@ bun run build
 Use the newest stable releases that have completed a one-day supply chain
 cooldown. `bunfig.toml` applies this minimum release age to newly resolved direct
 and transitive dependencies, without package exemptions. Existing lockfile entries
-are retained by ordinary installs; refresh them with `bun run deps:update`, review
-the release notes, and run the checks above before shipping. This command updates
+are retained by ordinary installs. A daily workflow opens dedicated dependency
+PRs using `bun run deps:update`; review release notes and run the checks above
+for those PRs. Ordinary feature PRs keep the locked dependencies. This command updates
 across major versions and keeps explicit semver ranges and a reproducible lockfile.
 Alpha, beta, and release-candidate builds are not selected by this policy.
 Do not extend the cooldown beyond 24 hours. If Bun's rapid-release stability
@@ -43,9 +51,9 @@ The standalone app is produced at
 `dist/GLKVM Clean-darwin-arm64/GLKVM Clean.app` on Apple Silicon. Install only
 the current version at `/Applications/GLKVM Clean.app`. Remove the temporary build
 after installation, point the Dock entry at that path, and use Git commits and
-pushes for history instead of retaining older app bundles. Increase the patch version in `package.json` for shipped
-code, behavior, or asset changes. Documentation-only and test-only changes do
-not need a version bump.
+pushes for history instead of retaining older app bundles. CI assigns a new patch
+version to every merge to main, including documentation and test changes.
+Do not bump `package.json` in individual PRs.
 
 Builds are signed with the Mac's valid Apple Development identity from the
 Keychain, including Electron helpers and frameworks, with Hardened Runtime, the
@@ -53,7 +61,7 @@ JIT entitlement required by V8, and the audio-input entitlement for connection
 microphones. If several such identities exist, set
 `GLKVM_SIGNING_IDENTITY` to the exact name shown by
 `security find-identity -v -p codesigning`, for example
-`Apple Development: Uwe Schwarz (54988A349V)`. The build fails if no identity
+`Apple Development: Your Name (YOURTEAMID)`. The build fails if no identity
 can be chosen or signing or verification fails; it does not fall back to an ad
 hoc signature. App and helper bundle identifiers stay stable, and each Mac
 should keep using the same identity so macOS can recognize future updates.
@@ -80,7 +88,9 @@ collisions as a possible source of local-network privacy problems in
 [TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 Migrating from the previous bundle identity may require a new network permission.
 
-This is a local development signature, without notarization or an upload to Apple.
+`bun start` and `bun run build` use a local development signature, without
+notarization or an upload to Apple. Official CI releases use Developer ID, secure
+timestamps and Apple notarization; see [release setup](docs/releases.md).
 Switching from the original ad hoc build may require a one-time permission prompt.
 Code signing preserves app identity; it does not grant privacy permissions or
 prevent macOS from requesting consent under its own policies. To verify an installed

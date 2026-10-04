@@ -3,3 +3,10 @@ node_modules/
 dist/
 coverage/
 *.zip
+*.dmg
+*.p12
+*.pfx
+*.key
+*.p8
+.env
+.env.*

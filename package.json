@@ -15,7 +15,11 @@
     "check": "tsc --noEmit",
     "build": "node scripts/build.cjs",
     "verify:signature": "node scripts/verify-signature.cjs",
-    "test:devices": "node scripts/run-app.cjs device-real-app"
+    "test:devices": "node scripts/run-app.cjs device-real-app",
+    "build:release": "node scripts/release.cjs build",
+    "release:check": "node scripts/release.cjs check",
+    "licenses:check": "node scripts/licenses.cjs",
+    "release:publish": "node scripts/release.cjs publish"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
@@ -26,5 +30,17 @@
   "trustedDependencies": [
     "electron"
   ],
-  "packageManager": "bun@1.4.2"
+  "packageManager": "bun@1.4.2",
+  "dependencies": {
+    "update-electron-app": "^3.3.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/layernine-dev/glkvm.git"
+  },
+  "homepage": "https://github.com/layernine-dev/glkvm#readme",
+  "bugs": {
+    "url": "https://github.com/layernine-dev/glkvm/issues"
+  }
 }
