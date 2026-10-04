@@ -36,6 +36,8 @@ const pressedButtons = new Set();
 let keyboard;
 const pendingModifiers = new Map();
 const consumedKeys = new Set();
+/** Audio switching shortcut keys consumed in every focus and mode, until released. */
+const pauseKeys = new Set();
 const heldModifiers = new Map();
 // The main process toggles audio switching for its shortcut; this page only consumes the key.
 const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste', 'pauseAudioSwitching']);
@@ -67,7 +69,8 @@ function handleKeyboardShortcut(event) {
   });
   if (event.type === 'keydown' && action) {
     for (const key of pendingModifiers.keys()) consumedKeys.add(key);
-    pendingModifiers.clear(); consumedKeys.add(code);
+    // The audio switching key itself is tracked in pauseKeys, which outlives focus changes.
+    pendingModifiers.clear(); if (action !== 'pauseAudioSwitching') consumedKeys.add(code);
     if (!event.repeat && action !== 'pauseAudioSwitching') ipcRenderer.send('glkvm:keyboard-shortcut', action);
     return true;
   }
@@ -182,7 +185,17 @@ for (const name of [
   window.addEventListener(name, event => {
     if (releasing) return;
     // The audio switching shortcut never reaches the page or the remote computer, in any mode.
+    // Its key stays consumed until released, even after its modifiers are or focus moves between
+    // the player and a local field; a fresh press means its keyup was missed.
+    if (event instanceof KeyboardEvent && event.isTrusted && pauseKeys.has(event.code)) {
+      if (event.type === 'keyup' || (event.type === 'keydown' && event.repeat)) {
+        if (event.type === 'keyup') pauseKeys.delete(event.code);
+        event.preventDefault(); event.stopImmediatePropagation(); return;
+      }
+      if (event.type === 'keydown') pauseKeys.delete(event.code);
+    }
     const pause = isPauseShortcut(event);
+    if (pause) pauseKeys.add(/** @type {KeyboardEvent} */ (event).code);
     if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent)) {
       if (pause) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;

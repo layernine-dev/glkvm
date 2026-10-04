@@ -130,10 +130,47 @@ server.listen(0, '127.0.0.1', async () => {
     pressPause(win);
     await expectPaused(true, 'The shortcut works while a local field has focus');
     assert.deepEqual(await win.webContents.executeJavaScript('window.fieldKeys.filter(code => code === "KeyA")'), [], 'The local field does not receive the shortcut key');
-    // Shortcut modifiers released in a local field are not replayed to the remote computer later.
-    await win.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
+    // Modifiers released before the key: its auto-repeats stay consumed until the key is released.
     /** @param {'keyDown' | 'keyUp'} type @param {string} keyCode @param {Electron.KeyboardInputEvent['modifiers']} modifiers */
     const sendKey = (type, keyCode, modifiers) => win.webContents.sendInputEvent({ type, keyCode, modifiers });
+    sendKey('keyDown', 'Meta', ['meta']); sendKey('keyDown', 'Shift', ['meta', 'shift']); sendKey('keyDown', 'A', ['meta', 'shift']);
+    sendKey('keyUp', 'Shift', ['meta']); sendKey('keyUp', 'Meta', []);
+    for (let i = 0; i < 3; i++) sendKey('keyDown', 'A', ['isautorepeat']);
+    sendKey('keyUp', 'A', []);
+    await expectPaused(false, 'One toggle for the press');
+    assert.deepEqual(await win.webContents.executeJavaScript("[window.fieldKeys.filter(code => code === 'KeyA'), document.querySelector('#local-input').value]"), [[], ''], 'Auto-repeats after releasing the modifiers do not reach the local field');
+    press('A', []);
+    await waitFor(() => win.webContents.executeJavaScript("window.fieldKeys.includes('KeyA')"));
+    pressPause(win);
+    await expectPaused(true, 'The next shortcut press toggles again');
+    assert.deepEqual(await win.webContents.executeJavaScript("window.fieldKeys.filter(code => code === 'KeyA')"), ['KeyA'], 'Only the plain press reaches the local field');
+    // The key stays consumed when focus moves between a local field and the player before it is released.
+    for (const [from, to] of [['#local-input', '#stream-box'], ['#stream-box', '#local-input']]) {
+      const wasPaused = paused();
+      await win.webContents.executeJavaScript(`document.querySelector('#local-input').value = ''; window.fieldKeys = []; document.querySelector('${from}').focus(); window.keyLog = []`);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      sendKey('keyDown', 'Meta', ['meta']); sendKey('keyDown', 'Shift', ['meta', 'shift']); sendKey('keyDown', 'A', ['meta', 'shift']);
+      sendKey('keyUp', 'Shift', ['meta']); sendKey('keyUp', 'Meta', []);
+      await expectPaused(!wasPaused, `The shortcut toggles once from ${from}`);
+      await win.webContents.executeJavaScript(`document.querySelector('${to}').focus()`);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      for (let i = 0; i < 3; i++) sendKey('keyDown', 'A', ['isautorepeat']);
+      sendKey('keyUp', 'A', []);
+      await expectPaused(!wasPaused, `Auto-repeats after moving focus from ${from} to ${to} do not toggle again`);
+      assert.deepEqual(await win.webContents.executeJavaScript("[window.keyLog.filter(entry => entry[1] === 'KeyA'), window.fieldKeys.filter(code => code === 'KeyA'), document.querySelector('#local-input').value]"), [[], [], ''], `Auto-repeats and the release after moving focus from ${from} to ${to} reach neither the remote computer nor the local field`);
+      press('A', []);
+      if (to === '#stream-box') {
+        await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length >= 2'));
+        assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'KeyA'], ['keyup', 'KeyA']], 'The next plain press reaches the remote computer');
+      } else {
+        await waitFor(() => win.webContents.executeJavaScript("window.fieldKeys.includes('KeyA')"));
+        assert.deepEqual(await win.webContents.executeJavaScript("[window.fieldKeys.filter(code => code === 'KeyA'), window.keyLog]"), [['KeyA'], []], 'The next plain press reaches only the local field');
+      }
+    }
+    assert.equal(paused(), true, 'Both transitions toggled exactly once each');
+    await win.webContents.executeJavaScript("document.querySelector('#local-input').value = ''");
+    // Shortcut modifiers released in a local field are not replayed to the remote computer later.
+    await win.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
     sendKey('keyDown', 'Meta', ['meta']); sendKey('keyDown', 'Shift', ['meta', 'shift']); sendKey('keyDown', 'A', ['meta', 'shift']); sendKey('keyUp', 'A', ['meta', 'shift']);
     await expectPaused(false, 'The shortcut resumes from the player');
     await win.webContents.executeJavaScript("document.querySelector('#local-input').focus()");
@@ -179,6 +216,19 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual([saved.insert, saved.pauseAudioSwitching.code, saved.pauseAudioSwitching.label], [defaults().keyboard?.insert, 'KeyA', '⇧⌘A'], 'Saving keeps prior bindings and stores the new one');
     pressPause(settings);
     await expectPaused(true, 'The shortcut works again after recording');
+    // Modifiers released before the key: its auto-repeats stay consumed until the key is released.
+    await settings.webContents.executeJavaScript("const field = document.createElement('input'); field.id = 'repeat-field'; document.body.append(field); window.fieldKeys = []; field.addEventListener('keydown', event => window.fieldKeys.push(event.code)); field.focus()");
+    /** @param {'keyDown' | 'keyUp'} type @param {string} keyCode @param {Electron.KeyboardInputEvent['modifiers']} modifiers */
+    const sendSettingsKey = (type, keyCode, modifiers) => settings.webContents.sendInputEvent({ type, keyCode, modifiers });
+    sendSettingsKey('keyDown', 'Meta', ['meta']); sendSettingsKey('keyDown', 'Shift', ['meta', 'shift']); sendSettingsKey('keyDown', 'A', ['meta', 'shift']);
+    sendSettingsKey('keyUp', 'Shift', ['meta']); sendSettingsKey('keyUp', 'Meta', []);
+    for (let i = 0; i < 3; i++) sendSettingsKey('keyDown', 'A', ['isautorepeat']);
+    sendSettingsKey('keyUp', 'A', []);
+    await expectPaused(false, 'One toggle for the press');
+    assert.deepEqual(await settings.webContents.executeJavaScript("[window.fieldKeys.filter(code => code === 'KeyA'), document.querySelector('#repeat-field').value]"), [[], ''], 'Auto-repeats after releasing the modifiers do not type into Settings');
+    await settings.webContents.executeJavaScript("document.querySelector('#repeat-field').remove()");
+    pressPause(settings);
+    await expectPaused(true, 'The next press toggles again');
     /** Saves from Settings, then focuses the viewer: Move Window Mode is only checked there.
      * @param {boolean} enabled */
     async function saveControl(enabled) {
