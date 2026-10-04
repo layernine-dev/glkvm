@@ -420,6 +420,14 @@ function installAudioRouting(bridge) {
   const pendingSinks = new WeakMap();
   /** @param {Sink} target */
   const sinkMatches = target => typeof route?.output === 'string' && !pendingSinks.has(target) && target.sinkId === route.output;
+  // Speaker changes reach Chromium only from applySink, through the methods captured here.
+  const nativeMediaSetSinkId = HTMLMediaElement.prototype.setSinkId;
+  const nativeContextSetSinkId = /** @type {Partial<Sink> | undefined} */ (NativeAudioContext?.prototype)?.setSinkId;
+  /** @param {Sink} target @param {string} id @returns {Promise<void>} */
+  const nativeSetSinkId = (target, id) => {
+    const method = target instanceof HTMLMediaElement ? nativeMediaSetSinkId : nativeContextSetSinkId;
+    return method ? method.call(target, id) : Promise.reject(new DOMException('Speaker selection is not supported.', 'NotSupportedError'));
+  };
   /** Overlapping setSinkId calls abort each other, so share one per element and device.
    * Fails closed: without a resolved speaker nothing is applied, not even the system default.
    * @param {Sink} target */
@@ -430,11 +438,28 @@ function installAudioRouting(bridge) {
     if (pending?.id === wanted) return pending.promise;
     if (!pending && target.sinkId === wanted) return Promise.resolve();
     // A queued change whose speaker was replaced meanwhile is skipped; callers check the route again.
-    const promise = (pending ? pending.promise.catch(() => {}) : Promise.resolve()).then(() => route?.output === wanted ? target.setSinkId(wanted) : undefined)
+    const promise = (pending ? pending.promise.catch(() => {}) : Promise.resolve()).then(() => route?.output === wanted ? nativeSetSinkId(target, wanted) : undefined)
       .finally(() => { if (pendingSinks.get(target)?.promise === promise) pendingSinks.delete(target); });
     pendingSinks.set(target, { id: wanted, promise });
     return promise;
   };
+  // The page may only ask for the selected speaker; that request joins the app's queue for the
+  // target, so it can neither overtake a newer route nor leave an older one behind. Any other
+  // speaker, the system default, or no output is refused: the next route change would move the
+  // target back anyway, and meanwhile a playing player or running context would leave the
+  // confirmed speaker while the window stays audible.
+  for (const proto of /** @type {(Partial<Sink> | undefined)[]} */ ([HTMLMediaElement.prototype, NativeAudioContext?.prototype])) {
+    if (typeof proto?.setSinkId !== 'function') continue;
+    /** @this {Sink} @param {unknown} id */
+    proto.setSinkId = async function setSinkId(id) {
+      if (!(this instanceof HTMLMediaElement || (NativeAudioContext && this instanceof NativeAudioContext))) throw new TypeError('Illegal invocation');
+      if (typeof id !== 'string' || id !== route?.output) throw new DOMException('The speaker is selected in GLKVM Clean.', 'NotAllowedError');
+      register(this);
+      await applySink(this);
+      // The route moved on meanwhile; the newer route is applied instead.
+      if (this.sinkId !== id || route?.output !== id) throw new DOMException('The selected speaker changed.', 'AbortError');
+    };
+  }
   /** Chromium rejects setSinkId for players whose stream has no audio track; they cannot output anything.
    * Any other player can start or gain audio later, so its failed speaker change is an error.
    * @param {Sink} target */
