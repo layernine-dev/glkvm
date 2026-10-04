@@ -543,7 +543,7 @@ function installAudioRouting(bridge) {
     if (!quiet && outputState === 'ok') { outputState = 'pending'; report(); }
     void refreshOutput();
   };
-  /** @type {WeakMap<HTMLMediaElement, {cancel(): void}>} */
+  /** @type {WeakMap<HTMLMediaElement, {cancel(): void, wake(): void}>} */
   const pendingPlays = new WeakMap();
   /** @this {HTMLMediaElement} */
   const gatedPlay = function play() {
@@ -555,17 +555,23 @@ function installAudioRouting(bridge) {
     /** @type {() => void} */
     let cancel = () => {};
     const cancelled = new Promise(resolve => { cancel = () => resolve(undefined); });
-    const token = { cancel };
+    /** @type {() => void} */
+    let changed = () => {};
+    /** @type {Promise<void>} */
+    let sourceChanged = new Promise(resolve => { changed = resolve; });
+    const token = { cancel, wake() {
+      const previous = changed;
+      sourceChanged = new Promise(resolve => { changed = resolve; });
+      previous();
+    } };
     pendingPlays.get(this)?.cancel();
     pendingPlays.set(this, token);
     return (async () => {
-      await Promise.race([firstRoute, cancelled]);
-      if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
       try {
         while (!silent(target) && !sinkMatches(target)) {
           // An initial or superseding unresolved route keeps the window muted,
           // but must not let the player start on the system default either.
-          await Promise.race([route?.output === null ? nextRoute : applySink(target), cancelled]);
+          await Promise.race([!route ? firstRoute : route.output === null ? nextRoute : applySink(target), cancelled, sourceChanged]);
           if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
         }
       } catch {
@@ -580,18 +586,40 @@ function installAudioRouting(bridge) {
   };
   HTMLMediaElement.prototype.play = gatedPlay;
   HTMLMediaElement.prototype.pause = function pause() { pendingPlays.get(this)?.cancel(); pendingPlays.delete(this); return nativePause.call(this); };
+  /** Source changes can make a waiting player video-only without a new audio route. @param {MediaStream} stream */
+  const refreshSource = stream => {
+    for (const ref of sinks) {
+      const sink = ref.deref();
+      if (sink instanceof HTMLMediaElement && srcObject.get?.call(sink) === stream) {
+        register(sink);
+        pendingPlays.get(sink)?.wake();
+      }
+    }
+  };
+  const watchedStreams = new WeakSet();
   Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
     ...srcObject,
-    set(value) { /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value); register(this); },
+    set(value) {
+      /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value);
+      if (value instanceof NativeMediaStream && !watchedStreams.has(value)) {
+        watchedStreams.add(value);
+        value.addEventListener('addtrack', () => refreshSource(value));
+        value.addEventListener('removetrack', () => refreshSource(value));
+      }
+      register(this);
+      pendingPlays.get(this)?.wake();
+    },
   });
   // A player gains audio when the page adds a remote audio track to its stream.
   const nativeAddTrack = MediaStream.prototype.addTrack;
   MediaStream.prototype.addTrack = function addTrack(track) {
     nativeAddTrack.call(this, track);
-    if (track?.kind === 'audio') for (const ref of sinks) {
-      const sink = ref.deref();
-      if (sink instanceof HTMLMediaElement && srcObject.get?.call(sink) === this) register(sink);
-    }
+    if (track?.kind === 'audio') refreshSource(this);
+  };
+  const nativeRemoveTrack = MediaStream.prototype.removeTrack;
+  MediaStream.prototype.removeTrack = function removeTrack(track) {
+    nativeRemoveTrack.call(this, track);
+    if (track?.kind === 'audio') refreshSource(this);
   };
   if (NativeAudioContext) {
     // New contexts render to no device until the selected speaker is applied.
