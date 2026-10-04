@@ -61,3 +61,17 @@ test('pause audio switching matches exact modifiers and is not a remote action',
   assert.equal(matchesBinding(null, input), false);
   assert.equal(keyboardAction(keyboard, input), undefined);
 });
+test('pause audio switching cannot take text editing shortcuts that remote actions may use', () => {
+  const darwin = process.platform === 'darwin';
+  /** @param {string} code @param {boolean} [shift] */
+  const command = (code, shift = false) => ({ code, meta: darwin, control: !darwin, alt: false, shift, label: code });
+  const editing = [command('KeyA'), command('KeyC'), command('KeyV'), command('KeyX'), command('KeyZ'), command('KeyZ', true), ...(darwin ? [] : [command('KeyY')])];
+  for (const binding of editing) {
+    assert.throws(() => validateKeyboard({ ...defaultKeyboard(), paste: null, pauseAudioSwitching: binding }), /text editing/, binding.code);
+    // Remote actions keep their semantics: the remote paste default is ⌘V.
+    assert.deepEqual(validateKeyboard({ ...defaultKeyboard(), paste: binding }).paste, binding);
+  }
+  assert.deepEqual(validateKeyboard(defaultKeyboard()), defaultKeyboard());
+  for (const binding of [command('KeyA', true), command('KeyV', true), command('KeyX', true), { ...command('KeyZ'), alt: true }, { ...command('KeyA'), meta: !darwin, control: darwin }, command('KeyB')])
+    assert.deepEqual(validateKeyboard({ ...defaultKeyboard(), pauseAudioSwitching: binding }).pauseAudioSwitching, binding, JSON.stringify(binding));
+});
