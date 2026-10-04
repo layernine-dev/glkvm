@@ -114,15 +114,16 @@ settings.load().then(async value => {
 function renderKeyboard() {
   const container = document.querySelector('#keyboard-bindings');
   container.replaceChildren();
-  for (const [action, title] of [['insert', 'Insert'], ['secureAttention', 'Ctrl + Alt + Delete'], ['paste', 'Paste clipboard as text']]) {
+  for (const [action, title] of [['insert', 'Insert'], ['secureAttention', 'Ctrl + Alt + Delete'], ['paste', 'Paste clipboard as text'], ['pauseAudioSwitching', 'Pause audio switching']]) {
     const row = document.createElement('div'); row.className = 'setting-row';
     const label = document.createElement('strong'); label.textContent = title;
     const record = document.createElement('button'); record.type = 'button';
     record.textContent = config.keyboard[action]?.label || 'Disabled';
     record.setAttribute('aria-label', `${title} shortcut: ${record.textContent}`);
     let recording = false;
-    record.addEventListener('click', () => { recording = true; record.textContent = 'Press shortcut…'; });
-    record.addEventListener('blur', () => { recording = false; record.textContent = config.keyboard[action]?.label || 'Disabled'; });
+    // While recording, the app leaves its own shortcuts, such as pausing audio switching, to this button.
+    record.addEventListener('click', () => { recording = true; settings.recording(true); record.textContent = 'Press shortcut…'; });
+    record.addEventListener('blur', () => { recording = false; settings.recording(false); record.textContent = config.keyboard[action]?.label || 'Disabled'; });
     record.addEventListener('keydown', event => {
       if (!recording) return;
       event.preventDefault(); event.stopPropagation();
@@ -224,6 +225,7 @@ function audioStatus(device, live) {
   }
   if (!live) parts.push('Choices apply while this connection is open.');
   else if (live.preparing) parts.push('Preparing the selected devices for this connection — silent until ready.');
+  if (live && audio.audioSwitchingPaused) parts.push(`Audio switching paused: this connection keeps its ${live.foreground ? 'focused' : 'background'} setting until you resume.`);
   const state = live?.status;
   if (state) {
     const profile = live.foreground ? 'focused' : 'background';
