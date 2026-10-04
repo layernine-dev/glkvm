@@ -45,8 +45,16 @@ footer { border-top:1px solid var(--border); display:flex; align-items:center; j
 @media (max-width:650px) { aside { width:138px; } .pages { padding:24px 18px; } footer { padding:14px 18px; } .device-bottom { align-items:flex-start; flex-direction:column; } }
 
 .forget { justify-self:start; font-size:12px; }
+/* Without a saved password, drop the whole row so the grid stays aligned. */
+.device-fields span:has(+ .forget[hidden]) { display:none; }
 #keyboard-bindings { margin-bottom:14px; }
 #keyboard-bindings .setting-row { display:grid; grid-template-columns:minmax(0,1fr) 110px minmax(0,1fr); }
 #keyboard-bindings .setting-row > button:last-child { justify-self:end; }
 #keyboard-bindings .setting-row > button { text-align:center; }
 #paste-keymap { width:180px; flex-shrink:0; }
+.audio { display:grid; grid-template-columns:112px minmax(0,1fr) minmax(0,1fr); gap:8px 10px; align-items:center; margin-top:14px; padding-top:13px; border-top:1px solid var(--border); }
+.audio-title { font-weight:500; }
+.audio-column { color:var(--secondary); font-size:12px; }
+.audio-label { color:var(--secondary); }
+.audio-status { grid-column:1 / -1; margin:2px 0 0; color:var(--secondary); font-size:12px; line-height:1.5; }
+.audio-startup { grid-column:1 / -1; }

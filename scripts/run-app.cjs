@@ -4,7 +4,7 @@ const { buildApp } = require('./build.cjs');
 
 async function main() {
   const tests = process.argv.slice(2);
-  if (tests.some(test => !['single-instance', 'browser', 'app', 'keyboard-app'].includes(test))) {
+  if (tests.some(test => !['single-instance', 'browser', 'app', 'keyboard-app', 'audio-app', 'startup-audio-app', 'device-id-app', 'device-real-app'].includes(test))) {
     throw new Error('Unknown GUI test.');
   }
   const appPath = await buildApp({ tests: tests.length > 0 });
@@ -14,7 +14,7 @@ async function main() {
     const timer = test ? setTimeout(() => {
       console.error(`GUI test timed out: ${test}`);
       child.kill('SIGKILL');
-    }, 120000) : null;
+    }, test === 'startup-audio-app' ? 300000 : 120000) : null;
     try {
       const code = await new Promise((resolve, reject) => {
         child.once('error', reject);
