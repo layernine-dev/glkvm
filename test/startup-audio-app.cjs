@@ -145,10 +145,12 @@ server.listen(0, '127.0.0.1', async () => {
   const signedInAddress = signedInServer.address();
   assert.ok(signedInAddress && typeof signedInAddress !== 'string');
   const thirdOrigin = `http://127.0.0.1:${signedInAddress.port}`;
-  /** @type {{foreground: import('../src/audio.cjs').AudioProfile, background: import('../src/audio.cjs').AudioProfile}} */
-  const microphoneProfiles = { foreground: { input: 'default', output: 'default' }, background: { input: 'default', output: 'default' } };
   /** @type {import('../src/audio.cjs').AudioProfile} */
   const savedMicrophone = { input: { uid: 'fake_audio_input_1', label: 'Fake Audio Input 1' }, output: 'default' };
+  // Select the fake device explicitly: Chromium's default-device capture can
+  // stall on neo even with fake media enabled. Never depend on the host default.
+  /** @type {{foreground: import('../src/audio.cjs').AudioProfile, background: import('../src/audio.cjs').AudioProfile}} */
+  const microphoneProfiles = { foreground: savedMicrophone, background: savedMicrophone };
   const config = defaults();
   // Globally muted throughout: nothing is audible even when device sound turns on.
   config.muted = true;
@@ -328,7 +330,7 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(startup(second)?.microphoneState, 'unavailable');
       assert.deepEqual([(await firmware(second)).calls, statuses.get(second.webContents.id)?.openInputs ?? 0], [[], 0], 'No capture');
     }
-    await save(value => { value.devices[1].audio.foreground.input = 'default'; value.devices[1].audio.background.input = 'default'; });
+    await save(value => { value.devices[1].audio.foreground.input = savedMicrophone.input; value.devices[1].audio.background.input = savedMicrophone.input; });
 
     // Direct H.264 has no sound or microphone in the firmware.
     await setStartup({ speaker: false, microphone: false }, { speaker: true, microphone: true });
