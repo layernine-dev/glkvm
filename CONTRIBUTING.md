@@ -54,10 +54,11 @@ python3 "$GLKVM_TEST_LOCK" /bin/zsh -lc \
   'export CMAKE_BUILD_PARALLEL_LEVEL=2; bun run check && bun run test && bun run test:gui'
 ```
 
-The runner provides GLKVM_TEST_LOCK as a local environment variable; CI receives
-its path through the repository secret of the same name. Other developers can
-use the ordinary commands on their own Mac. Compiler parallelism is capped at
-two jobs.
+CI receives the existing lock script's path through the `GLKVM_TEST_LOCK`
+repository secret. When running the command above manually on a shared runner,
+set that environment variable to the runner's local lock script first. Other
+developers can use the ordinary commands on their own Mac. Compiler parallelism
+is capped at two jobs.
 
 ## Pull requests and releases
 

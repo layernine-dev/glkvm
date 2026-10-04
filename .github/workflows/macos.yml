@@ -18,12 +18,16 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, glkvm-macos]
     timeout-minutes: 60
     steps:
+      - name: Mask runner-local paths
+        shell: zsh "{0}"
+        run: echo "::add-mask::$HOME"
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Run tests in the shared macOS slot
         shell: zsh "{0}"
         run: |
+          : "${GLKVM_TEST_LOCK:?Configure the runner lock path repository secret}"
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           export CMAKE_BUILD_PARALLEL_LEVEL=2
@@ -45,6 +49,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Mask runner-local paths
+        shell: zsh "{0}"
+        run: echo "::add-mask::$HOME"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -56,6 +63,7 @@ jobs:
           GLKVM_RELEASE_SIGNING_IDENTITY: ${{ vars.GLKVM_RELEASE_SIGNING_IDENTITY }}
           GLKVM_NOTARY_PROFILE: ${{ vars.GLKVM_NOTARY_PROFILE }}
         run: |
+          : "${GLKVM_TEST_LOCK:?Configure the runner lock path repository secret}"
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           export CMAKE_BUILD_PARALLEL_LEVEL=2

@@ -87,7 +87,7 @@ async function buildApp({ tests = false, release = false, appVersion = version }
 
 module.exports = { buildApp };
 if (require.main === module) {
-  void buildApp().then(console.log).catch(error => {
+  void buildApp().then(() => console.log('Built GLKVM Clean.app.')).catch(error => {
     console.error(error.message);
     process.exitCode = 1;
   });

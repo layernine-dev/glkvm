@@ -70,7 +70,7 @@ async function buildRelease() {
   const sha256 = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), `${sha256}  ${path.basename(archive)}\n`);
   fs.writeFileSync(path.join(output, 'release.json'), JSON.stringify({ ...info, archive: path.basename(archive), sha256, notarizationId: result.id, electron: require('electron/package.json').version }, null, 2) + '\n');
-  console.log(`Notarized release ${info.tag}: ${archive}`);
+  console.log(`Notarized release ${info.tag}: ${path.basename(archive)}`);
 }
 
 /** @param {string} endpoint @param {object} [body] */
