@@ -31,6 +31,8 @@ jobs:
             bun run check
             bun run test
             bun run test:gui
+            bun run build
+            bun run licenses:check
           '
   release:
     name: Publish release
