@@ -36,8 +36,11 @@ const pressedButtons = new Set();
 let keyboard;
 const pendingModifiers = new Map();
 const consumedKeys = new Set();
+/** Audio switching shortcut keys consumed in every focus and mode, until released. */
+const pauseKeys = new Set();
 const heldModifiers = new Map();
-const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste']);
+// The main process toggles audio switching for its shortcut; this page only consumes the key.
+const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste', 'pauseAudioSwitching']);
 /** @type {Record<string, 'meta' | 'control' | 'alt' | 'shift'>} */
 const modifierNames = { MetaLeft: 'meta', MetaRight: 'meta', ControlLeft: 'control', ControlRight: 'control', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
 function flushModifiers() {
@@ -66,8 +69,9 @@ function handleKeyboardShortcut(event) {
   });
   if (event.type === 'keydown' && action) {
     for (const key of pendingModifiers.keys()) consumedKeys.add(key);
-    pendingModifiers.clear(); consumedKeys.add(code);
-    if (!event.repeat) ipcRenderer.send('glkvm:keyboard-shortcut', action);
+    // The audio switching key itself is tracked in pauseKeys, which outlives focus changes.
+    pendingModifiers.clear(); if (action !== 'pauseAudioSwitching') consumedKeys.add(code);
+    if (!event.repeat && action !== 'pauseAudioSwitching') ipcRenderer.send('glkvm:keyboard-shortcut', action);
     return true;
   }
   if (consumedKeys.has(code)) {
@@ -83,10 +87,22 @@ function handleKeyboardShortcut(event) {
   return false;
 }
 
+/** @param {Event} event */
+function isPauseShortcut(event) {
+  const binding = keyboard?.pauseAudioSwitching;
+  return event instanceof KeyboardEvent && event.type === 'keydown' && event.isTrusted && !!binding && binding.code === event.code && binding.meta === event.metaKey && binding.control === event.ctrlKey && binding.alt === event.altKey && binding.shift === event.shiftKey;
+}
 function playerFocused() {
   return !!player && (document.activeElement === player || player.contains(document.activeElement)) && !document.activeElement?.closest('input, textarea, select, [contenteditable="true"]');
 }
-function reportPlayerFocus() { ipcRenderer.send('glkvm:player-focus', playerFocused()); }
+let playerHadFocus = false;
+function reportPlayerFocus() {
+  const focused = playerFocused();
+  // Keys released outside the player never reach it: forget them now rather than replaying them later.
+  if (playerHadFocus && !focused) releaseInput();
+  playerHadFocus = focused;
+  ipcRenderer.send('glkvm:player-focus', focused);
+}
 window.addEventListener('focusin', reportPlayerFocus);
 window.addEventListener('focusout', () => queueMicrotask(reportPlayerFocus));
 let keyboardBusy = false;
@@ -168,12 +184,27 @@ for (const name of [
 ]) {
   window.addEventListener(name, event => {
     if (releasing) return;
-    if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent)) return;
+    // The audio switching shortcut never reaches the page or the remote computer, in any mode.
+    // Its key stays consumed until released, even after its modifiers are or focus moves between
+    // the player and a local field; a fresh press means its keyup was missed.
+    if (event instanceof KeyboardEvent && event.isTrusted && pauseKeys.has(event.code)) {
+      if (event.type === 'keyup' || (event.type === 'keydown' && event.repeat)) {
+        if (event.type === 'keyup') pauseKeys.delete(event.code);
+        event.preventDefault(); event.stopImmediatePropagation(); return;
+      }
+      if (event.type === 'keydown') pauseKeys.delete(event.code);
+    }
+    const pause = isPauseShortcut(event);
+    if (pause) pauseKeys.add(/** @type {KeyboardEvent} */ (event).code);
+    if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent)) {
+      if (pause) { event.preventDefault(); event.stopImmediatePropagation(); }
+      return;
+    }
     if (!controlEnabled || moving || !ready || ['dragstart', 'dragover', 'drop'].includes(name)) {
       event.preventDefault(); event.stopImmediatePropagation(); return;
     }
     if (event instanceof KeyboardEvent) {
-      if (handleKeyboardShortcut(event)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      if (handleKeyboardShortcut(event) || pause) { event.preventDefault(); event.stopImmediatePropagation(); return; }
       if (name === 'keydown') pressedKeys.set(event.code || event.key, { code: event.code, key: event.key, location: event.location });
       if (name === 'keyup') pressedKeys.delete(event.code || event.key);
     }

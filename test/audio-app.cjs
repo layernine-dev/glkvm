@@ -629,8 +629,69 @@ server.listen(0, '127.0.0.1', async () => {
 
     await run(settings, "document.querySelector('#connections-tab').click()");
     await waitFor(() => run(settings, `document.querySelector('.audio-foreground-input').textContent.includes(${JSON.stringify(mic1.label)})`), 'settings device names');
+
+    // Pausing audio switching keeps each connection's selected profile, not its devices.
+    const pauseItem = () => Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label.startsWith('Pause Audio Switching'));
+    /** @returns {Promise<Record<string, {foreground: boolean}>>} */
+    const liveProfiles = async () => (await run(settings, 'window.settings.audio()')).connections;
+    const pausedNotice = /Audio switching paused: this connection keeps its focused setting until you resume\./;
+    await save(value => { value.devices[0].audio = { foreground: { input: 'disabled', output: pick(speaker1) }, background: { input: 'disabled', output: pick(speaker2) } }; });
+    app.focus({ steal: true }); first.focus();
+    await waitFor(() => first.isFocused() && status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok', 'foreground before pausing');
+    assert.equal(pauseItem()?.checked, false);
+    pauseItem()?.click();
+    assert.equal(pauseItem()?.checked, true, 'The menu shows the pause');
+    const pausedGeneration = status(first)?.generation;
+    settings.focus(); await waitFor(() => settings.isFocused());
+    first.minimize(); await waitFor(() => first.isMinimized(), 'minimized while paused');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.deepEqual([status(first)?.output, status(first)?.generation, (await liveProfiles()).first.foreground], [speaker1.deviceId, pausedGeneration, true], 'Focus changes keep the focused profile while paused');
+    await waitFor(async () => pausedNotice.test(await audioStatusText()), 'paused status in Settings');
+    first.restore(); await waitFor(() => !first.isMinimized(), 'restored while paused');
+    settings.focus(); await waitFor(() => settings.isFocused());
+    // Preferences still apply to the kept profile, and the mute stays independent.
+    await save(value => { value.devices[0].audio.foreground.output = pick(speaker2); });
+    await waitFor(() => status(first)?.output === speaker2.deviceId && status(first)?.outputState === 'ok', 'kept profile follows its new speaker');
+    await save(value => { value.devices[0].audio.foreground.output = pick(speaker1); });
+    await waitFor(() => status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'kept profile speaker restored');
+    await save(value => { value.muted = true; });
+    await waitFor(() => first.webContents.isAudioMuted(), 'global mute while paused');
+    assert.equal(status(first)?.output, speaker1.deviceId);
+    await save(value => { value.muted = false; });
+    await waitFor(() => !first.webContents.isAudioMuted(), 'unmuted while paused');
+    // Microphone access and device discovery continue for the kept profile.
+    await save(value => { value.devices[0].audio.foreground.input = pick(mic1); });
+    await waitFor(() => status(first)?.input === 'live' && status(first)?.inputDevice === mic1.deviceId && status(first)?.openInputs === 1, 'kept profile opens its microphone');
+    await waitFor(() => reports.get(first.webContents.id)?.some(device => device.kind === 'audioinput'), 'microphone names listed while paused');
+    await run(first, "navigator.mediaDevices.dispatchEvent(new Event('devicechange'))");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.deepEqual([status(first)?.inputDevice, status(first)?.output, (await liveProfiles()).first.foreground], [mic1.deviceId, speaker1.deviceId, true], 'A device change keeps the paused profile');
+    await save(value => { value.devices[0].audio.foreground.input = 'disabled'; });
+    await waitFor(() => status(first)?.input === 'disabled' && status(first)?.openInputs === 0, 'kept profile microphone disabled');
+    // A reload keeps the pause and the kept profile.
+    const beforePausedReload = /** @type {number} */ (status(first)?.generation);
+    first.webContents.reload();
+    await waitFor(() => (status(first)?.generation ?? 0) > beforePausedReload && status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'focused profile after reload while paused');
+    assert.equal(first.isFocused(), false, 'The reloaded viewer is not focused');
+    assert.equal(pauseItem()?.checked, true, 'The pause survives a reload');
+    // A viewer opened while paused uses the background profile, even when focused.
+    second.close();
+    await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Second'), 'second closed');
+    await run(settings, "window.settings.open('second')");
+    await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Second'), 'second reopened');
+    const reopened = /** @type {Electron.BrowserWindow} */ (BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Second'));
+    await waitFor(() => reopened.isVisible(), 'reopened viewer shown');
+    reopened.focus();
+    await waitFor(async () => reopened.isFocused() && (await liveProfiles()).second?.foreground === false, 'reopened viewer in background while paused');
+    assert.equal((await liveProfiles()).first.foreground, true);
+    // Resuming follows native focus at once.
+    pauseItem()?.click();
+    assert.equal(pauseItem()?.checked, false);
+    await waitFor(() => status(first)?.output === speaker2.deviceId && status(first)?.outputState === 'ok', 'background profile after resuming');
+    await waitFor(async () => (await liveProfiles()).second?.foreground === true, 'focused viewer in foreground after resuming');
+    await waitFor(async () => !pausedNotice.test(await audioStatusText()), 'paused status cleared');
     if (evidence) fs.writeFileSync(path.join(evidence, 'settings-audio.png'), (await settings.webContents.capturePage()).toPNG());
-    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable and immediate silence for an unresolved device during a pending device request, speaker lost during the device check applies nothing (no system default) and stays muted, same-document changes stay audible, reload muted from navigation start with stale old-page confirmations ignored, early attached/detached players wait for the delayed first route and start on its speaker, pause cancels a waiting play, native autoplay routed, video-only fast path, uncommitted navigation re-routes the kept page');
+    console.log('PASS: fake-device safety gate, per-connection device scoping, no capture from focus or settings, foreground/background/minimized routing, active microphone replacement with stable vendor track and mute, speaker routing for existing and new elements, rapid transitions, missing devices silent and retained, disabled microphone, global mute, camera/subframe/disabled-connection denial, stop cleanup, delayed A->B->A speaker generations, silent new contexts, fail-closed playback on speaker errors (detached and attached), play waiting across a route change and newest-generation confirmation, ungated start paused until routed, track and stream clone lifecycle with native/other-frame stop, both-profiles-disabled restore with mute and device re-listing, device change without fallback, immediate disable and immediate silence for an unresolved device during a pending device request, speaker lost during the device check applies nothing (no system default) and stays muted, same-document changes stay audible, reload muted from navigation start with stale old-page confirmations ignored, early attached/detached players wait for the delayed first route and start on its speaker, pause cancels a waiting play, native autoplay routed, video-only fast path, uncommitted navigation re-routes the kept page, paused audio switching keeps each focused or background profile across focus, minimize, preference changes, microphone access, device changes, mute and reload, viewers opened while paused use background, and resuming follows native focus');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Statuses:', JSON.stringify([...statuses]));
