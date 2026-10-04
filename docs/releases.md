@@ -2,16 +2,17 @@
 
 Every merge to main is live after CI succeeds. There are no release PRs, test
 channels or prereleases. Tests and releases execute on the trusted macOS runner.
-The repository and GitHub Releases remain private. Only people with repository
-access can download them. Automatic app updates are currently disabled in every
-build through `updatesEnabled: false` in `release.json`.
+The repository and GitHub Releases are public. Official release bundles enable
+automatic updates through `updatesEnabled: true` in `release.json`; development
+and GUI-test bundles always keep updates disabled.
 The workflow has a FIFO concurrency queue (up to GitHub's 100-run limit) and
 never cancels an in-progress release when another merge arrives.
 
 ## One-time setup
 
-1. Keep the upstream GitHub repository private. No GitHub token is shipped in
-   the app. Download and install release ZIPs manually through GitHub.
+1. Keep the upstream GitHub repository public for `update.electronjs.org`. No
+   GitHub token is shipped in the app. Install the first updater-enabled release
+   manually from GitHub; subsequent versions can update automatically.
 2. On the macOS runner, install the project's **Developer ID Application** certificate with
    its private key in the signing Keychain. An **Apple Development** certificate
    remains the correct identity for local development/GUI tests but cannot replace
@@ -37,7 +38,8 @@ never cancels an in-progress release when another merge arrives.
 
 The runner needs GitHub CLI and the existing signed runner's Keychain access.
 The release job's temporary `GITHUB_TOKEN` has `contents: write`; the dependency
-job additionally needs PR creation and workflow dispatch permissions.
+job additionally needs PR creation permission. The Actions actor policy allows
+only keeperxy and uwe-schwarz; bot PRs require a maintainer to dispatch CI.
 
 ## Build and publish
 
@@ -65,17 +67,12 @@ and higher version; do not overwrite old ZIPs or move tags backwards.
 
 ## App updates and initial installation
 
-App updates are disabled, including in official release bundles. The update menu
-is disabled and no update checks or downloads run. Install a new private release
-manually from GitHub. License texts remain accessible through Open Source Licenses.
+Official release bundles use `update-electron-app` with the public service
+`update.electronjs.org`. The publisher verifies public repository visibility
+before uploading and again before publication. License texts remain accessible
+through Open Source Licenses.
 
-The dormant integration uses `update-electron-app`. Its current public service,
-`update.electronjs.org`, requires public GitHub releases and cannot read this
-private repository. Enabling it requires an explicit distribution decision and
-a verified update path; changing repository visibility is not part of a release.
-The publisher rejects private releases with this public updater enabled.
-
-When enabled in the future, the integration checks at startup
+The integration checks at startup
 and hourly, downloads in the background and offers the native Restart / Later
 dialog. The app menu also provides Check for Updates. KVM input is released before
 update shutdown. The package's downloaded update is installed on the next normal
@@ -85,14 +82,14 @@ Development and GUI-test bundles always disable updates even though they are
 packaged. Unit tests cover this gate and the GUI suite verifies that its update
 menu is disabled.
 
-Existing development installations need a manual installation of the first
-official build. Keep the same `/Applications/GLKVM Clean.app`
+Existing development installations and older releases with updates disabled need
+a manual installation of the first updater-enabled official build. Keep the same `/Applications/GLKVM Clean.app`
 path, bundle ID and user-data directory. The switch from Apple Development to
 Developer ID changes the code-signing requirement; do not promise that existing
 Keychain/TCC consent will carry over. Validate saved-password access in the signed
 product app without deleting keys or changing ACLs.
 
-Before enabling automatic updates, verify a real signed/notarized A-to-B update on
+When validating the first automatic upgrade, verify a real signed/notarized A-to-B update on
 a test Mac: download, restart, new version, preserved settings and credentials,
 and continued microphone/network permissions. Also verify offline behavior and
 rejection of an invalidly signed update. Fixture tests alone do not certify this

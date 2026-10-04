@@ -33,9 +33,12 @@
   identifiers and executable UUID derivation. Tests must never enable the updater.
 - Every merge to main is a release after successful CI. CI assigns the version;
   do not bump package.json in ordinary PRs or introduce prerelease channels.
-- Keep the repository and releases private, with app updates disabled. Do not
-  change repository visibility or add branch protection without user instruction.
-- CI runs trusted repository pushes on the macOS runner under its shared test lock, with at
-  most two compiler jobs. Do not add untrusted fork execution on that runner.
+- Keep the repository and releases public, with updates enabled only in official
+  release bundles. Do not add branch protection without user instruction.
+- Automatic PR CI is limited to keeperxy and uwe-schwarz. Keep the GitHub Actions
+  actor policy and workflow author checks; do not add a push or bot-dispatch bypass.
+- CI runs on main pushes, trusted PRs and maintainer dispatches under the macOS
+  runner's shared test lock, with at most two compiler jobs. Never run untrusted PRs
+  on that runner.
 - Keep release credentials out of Git. Preserve third-party license texts in
   distributed bundles; run `bun run licenses:check` after building.

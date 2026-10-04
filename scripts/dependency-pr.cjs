@@ -37,10 +37,9 @@ try {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-deps-'));
     try {
       const body = path.join(directory, 'body.md');
-      fs.writeFileSync(body, 'Updates direct and transitive dependencies, including major versions, through Bun’s configured 24-hour release cooldown.\n\nReview upstream release notes and the dependency diff before merging. The dispatched macOS checks cover type checking, unit tests and signed GUI fixtures on the macOS runner. Electron/Chromium changes also require reviewing the device-ID mapping in src/device-ids.cjs.\n\nMerging this PR publishes a new release after CI succeeds.\n');
+      fs.writeFileSync(body, 'Updates direct and transitive dependencies, including major versions, through Bun’s configured 24-hour release cooldown.\n\nReview upstream release notes and the dependency diff before merging. Bot-authored PRs do not automatically start macOS CI. keeperxy or uwe-schwarz can run the CI workflow manually for this branch before merging. Electron/Chromium changes also require reviewing the device-ID mapping in src/device-ids.cjs.\n\nMerging this PR publishes a new release after CI succeeds.\n');
       run('gh', ['pr', 'create', '--head', branch, '--base', 'main', '--title', 'Update dependencies after the 24-hour cooldown', '--body-file', body]);
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   }
-  // GITHUB_TOKEN pushes don't trigger push workflows; dispatch CI explicitly.
-  run('gh', ['workflow', 'run', 'macos.yml', '--ref', branch]);
+  // Only the two trusted maintainers may start CI; do not dispatch as the bot.
 } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }

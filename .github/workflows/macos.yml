@@ -1,20 +1,27 @@
 name: CI
 on:
   push:
-    branches: ['**']
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 env:
   GLKVM_TEST_LOCK: ${{ secrets.GLKVM_TEST_LOCK }}
 permissions:
   contents: read
 concurrency:
-  group: glkvm-${{ github.ref }}
+  group: glkvm-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
   queue: max
 jobs:
   test:
     name: macOS checks
-    if: github.repository == 'layernine-dev/glkvm'
+    if: >-
+      github.repository == 'layernine-dev/glkvm' &&
+      (github.actor == 'keeperxy' || github.actor == 'uwe-schwarz') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.user.login == 'keeperxy' ||
+       github.event.pull_request.user.login == 'uwe-schwarz')
     runs-on: [self-hosted, macOS, ARM64, glkvm-macos]
     timeout-minutes: 60
     steps:
@@ -27,6 +34,10 @@ jobs:
       - name: Run tests in the shared macOS slot
         shell: zsh "{0}"
         run: |
+          # Fork PRs have no repository secrets; use the runner-local setting.
+          if [[ -z "$GLKVM_TEST_LOCK" && -f "$HOME/.config/glkvm/ci.env" ]]; then
+            source "$HOME/.config/glkvm/ci.env"
+          fi
           : "${GLKVM_TEST_LOCK:?Configure the runner lock path repository secret}"
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"

@@ -2,5 +2,5 @@
   "baseCommit": "d15dbddb36ef0588eb806fa377220fc0f9f9c872",
   "baseVersion": "0.1.21",
   "repository": "layernine-dev/glkvm",
-  "updatesEnabled": false
+  "updatesEnabled": true
 }
