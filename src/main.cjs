@@ -101,7 +101,12 @@ function handleAppShortcuts(contents, pageConsumes = false) {
   /** @type {Set<string>} */
   const dropped = new Set();
   contents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyUp' && dropped.delete(input.code)) { event.preventDefault(); return; }
+    // A dropped key stays dropped until released, even after its modifiers are; a fresh press means its keyUp was missed.
+    if (dropped.has(input.code) && (input.type === 'keyUp' || input.isAutoRepeat)) {
+      if (input.type === 'keyUp') dropped.delete(input.code);
+      event.preventDefault(); return;
+    }
+    if (input.type === 'keyDown') dropped.delete(input.code);
     const recording = settingsRecording && !!settingsWindow && contents === settingsWindow.webContents;
     if (input.type === 'keyDown' && !recording && matchesBinding(config.keyboard?.pauseAudioSwitching, input)) {
       if (!input.isAutoRepeat) toggleAudioSwitching();
