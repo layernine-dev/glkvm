@@ -85,12 +85,20 @@ function publishRelease() {
   if (path.dirname(archive) !== output || createHash('sha256').update(fs.readFileSync(archive)).digest('hex') !== info.sha256) throw new Error('Release archive checksum mismatch.');
   const repo = `repos/${config.repository}`;
   const metadata = api(repo);
-  if (metadata.private && info.updatesEnabled) throw new Error('Public updates require a public GitHub repository. Disable updates for private releases.');
+  if (metadata.private !== true) throw new Error('Releases require a private repository.');
+  if (info.updatesEnabled) throw new Error('Disable updates for private releases.');
   // Fetch all releases so retries can find an older draft without changing it.
   const releases = JSON.parse(run('gh', ['api', `${repo}/releases?per_page=100`, '--paginate', '--slurp'])).flat();
   let release = releases.find((/** @type {any} */ item) => item.tag_name === info.tag);
   const marker = `Source commit: ${info.sha}`;
   if (release && !release.body?.includes(marker)) throw new Error('Existing release belongs to a different source commit.');
+  // GitHub ignores target_commitish when a tag already exists. Establish and
+  // resolve the exact tag before creating a draft or uploading any assets.
+  const refs = api(`${repo}/git/matching-refs/tags/${info.tag}`);
+  if (!refs.some((/** @type {any} */ ref) => ref.ref === `refs/tags/${info.tag}`)) {
+    api(`${repo}/git/refs`, { ref: `refs/tags/${info.tag}`, sha: info.sha });
+  }
+  if (api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Version tag belongs to a different source commit.');
   if (!release) release = api(`${repo}/releases`, {
     tag_name: info.tag, target_commitish: info.sha, name: `GLKVM Clean ${info.version}`, draft: true, prerelease: false,
     body: `${marker}\n\nApple Silicon, latest macOS. Download the ZIP, extract it and move GLKVM Clean.app to /Applications.\n\nChanges: https://github.com/${config.repository}/commit/${info.sha}\n\nElectron ${info.electron}. Signed with Developer ID and notarized by Apple. Full third-party notices are included in the app (Open Source Licenses menu).`,
@@ -107,12 +115,14 @@ function publishRelease() {
     if (!asset || asset.size !== fs.statSync(path.join(output, file)).size || asset.digest !== expectedDigest) throw new Error(`Uploaded asset did not verify: ${file}`);
   }
   if (readback.draft) {
+    if (api(repo).private !== true) throw new Error('Releases require a private repository.');
+    if (api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Version tag changed before publication.');
     const newer = releases.some((/** @type {any} */ item) => !item.draft && /^v\d+\.\d+\.\d+$/.test(item.tag_name) && compareVersions(item.tag_name.slice(1), info.version) > 0);
     run('gh', ['api', `${repo}/releases/${release.id}`, '--method', 'PATCH', '--input', '-'], JSON.stringify({ draft: false, make_latest: newer ? 'false' : 'true' }));
   }
   const published = api(`${repo}/releases/${release.id}`);
   if (published.draft || published.prerelease || api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Published release/tag verification failed.');
-  console.log(`Verified ${metadata.private ? 'private' : 'public'} release: ${published.html_url}`);
+  console.log(`Verified private release: ${published.html_url}`);
 }
 /** @param {string} a @param {string} b */
 function compareVersions(a, b) {
@@ -122,6 +132,7 @@ function compareVersions(a, b) {
 }
 function alreadyPublished() {
   const info = releaseInfo();
+  if (api(`repos/${config.repository}`).private !== true) throw new Error('Releases require a private repository.');
   const releases = JSON.parse(run('gh', ['api', `repos/${config.repository}/releases?per_page=100`, '--paginate', '--slurp'])).flat();
   const release = releases.find((/** @type {any} */ item) => item.tag_name === info.tag && !item.draft);
   if (!release) return false;
