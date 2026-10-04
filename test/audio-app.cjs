@@ -84,7 +84,7 @@ server.listen(0, '127.0.0.1', async () => {
   const config = defaults();
   config.muted = false;
   config.devices = [
-    { id: 'first', name: 'First', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true, audio: { foreground: { input: 'default', output: 'default' }, background: { input: 'disabled', output: 'default' } } },
+    { id: 'first', name: 'First', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true, audio: { foreground: { input: 'default', output: 'default' }, background: { input: 'disabled', output: 'default' }, startup: { speaker: false, microphone: false } } },
     { id: 'second', name: 'Second', origin: `http://localhost:${address.port}`, openAtStartup: true },
   ];
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(config));

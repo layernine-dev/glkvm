@@ -207,10 +207,14 @@ afterwards are kept through focus, speaker or audio-only changes. The app uses t
 firmware's own controls (`kvm.setVolumeOn`, `audioMic.setMicMuted`) once its player,
 live video and USB settings are ready; it never changes the device's USB microphone
 setting. The microphone turns on only if the USB microphone is enabled on the device and
-the current window state has an available microphone selected here. Direct H.264 mode has
-no device audio. A denied microphone is not retried until the page is reloaded. Changing
-a connection's address turns off its microphone setting. App muting and the speaker
-choices still apply. Settings shows the result for each open connection.
+the current window state has an available microphone selected here; a saved microphone
+that is still being matched for a newly opened session is awaited for up to 20 seconds.
+Direct H.264 mode has no device audio. A microphone start that is denied, fails, or is
+ended by the device page before capturing is reported once and not retried until the page
+is reloaded. Saving a different address turns off the connection's microphone setting;
+an address that only differs in spelling (such as a trailing slash or letter case) keeps
+it. App muting and the speaker choices still apply. Settings shows the result for each
+open connection.
 
 The **Controls** page sets the default keyboard/mouse mode and app audio muting.
 Changing the default input mode also applies it to open KVM windows. The per-window

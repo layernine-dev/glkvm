@@ -29,7 +29,7 @@ test('legacy connections migrate with microphones disabled and system output', (
 test('audio choices are validated and independent per connection and profile', () => {
   const config = defaults();
   config.devices.push({ id: 'lab', name: 'Lab', origin: 'https://lab.test', openAtStartup: false });
-  config.devices[0].audio = { foreground: { input: mic, output: speaker }, background: { input: 'disabled', output: 'default' } };
+  config.devices[0].audio = { foreground: { input: mic, output: speaker }, background: { input: 'disabled', output: 'default' }, startup: defaultAudio().startup };
   const saved = validateConfig(config);
   assert.deepEqual(saved.devices[0].audio?.foreground, { input: mic, output: speaker });
   assert.deepEqual(saved.devices[1].audio, defaultAudio());
@@ -159,7 +159,7 @@ test('device labels are unique, valid settings labels and independent of list or
 test('media permissions allow only the configured viewer main frame', () => {
   const origin = 'https://glkvm.test';
   /** @type {import('../src/audio.cjs').AudioSettings} */
-  const audio = { foreground: { input: mic, output: 'default' }, background: { input: 'disabled', output: speaker } };
+  const audio = { foreground: { input: mic, output: 'default' }, background: { input: 'disabled', output: speaker }, startup: defaultAudio().startup };
   /** @param {boolean} foreground @param {import('../src/audio.cjs').AudioSettings} [settings] */
   const route = (foreground, settings = audio) => routeFor(settings, foreground, listed);
   const base = { viewer: true, origin, route: route(true) };

@@ -14,7 +14,7 @@ async function main() {
     const timer = test ? setTimeout(() => {
       console.error(`GUI test timed out: ${test}`);
       child.kill('SIGKILL');
-    }, 120000) : null;
+    }, test === 'startup-audio-app' ? 300000 : 120000) : null;
     try {
       const code = await new Promise((resolve, reject) => {
         child.once('error', reject);

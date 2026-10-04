@@ -9,6 +9,11 @@ function message(text, error = false) {
   status.classList.toggle('error', error);
 }
 function changed() { dirty = true; message('Unsaved changes'); }
+// Saving a different origin turns off the microphone at connect (see credentials.cjs). The address
+// field shows that before saving, and restores the switch when the edit returns to the saved origin.
+const savedOrigins = new WeakMap();
+const heldMicrophones = new WeakSet();
+function originOf(value) { try { return new URL(value).origin; } catch { return ''; } }
 function render() {
   renderKeyboard();
   list.replaceChildren();
@@ -41,12 +46,14 @@ function render() {
     const startup = row.querySelector('input[type=checkbox]');
     name.value = device.name;
     address.value = device.origin;
+    if (device.id && !savedOrigins.has(device)) savedOrigins.set(device, device.origin);
     startup.checked = device.openAtStartup;
     name.addEventListener('input', () => { device.name = name.value; changed(); });
     address.addEventListener('input', () => {
       device.origin = address.value;
-      // Saving a new address turns off the microphone at connect; show it before saving.
-      if (device.id && device.audio?.startup.microphone) { device.audio.startup.microphone = false; renderAudio(audioGroup, device); }
+      const moved = savedOrigins.has(device) && originOf(address.value) !== savedOrigins.get(device);
+      if (moved && device.audio?.startup.microphone) { device.audio.startup.microphone = false; heldMicrophones.add(device); renderAudio(audioGroup, device); }
+      else if (!moved && heldMicrophones.delete(device)) { device.audio.startup.microphone = true; renderAudio(audioGroup, device); }
       changed();
     });
     startup.addEventListener('change', () => { device.openAtStartup = startup.checked; changed(); });
@@ -198,6 +205,7 @@ function renderAudio(container, device) {
     toggle.checked = device.audio.startup[key];
     toggle.addEventListener('change', () => {
       device.audio.startup[key] = toggle.checked; changed();
+      if (key === 'microphone') heldMicrophones.delete(device);
       container.querySelector('.audio-status').textContent = audioStatus(device, live);
     });
     label.append(toggle, ` ${title}`);
