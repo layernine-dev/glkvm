@@ -16,21 +16,28 @@ app.setPath('userData', directory);
 
 // Mirrors the firmware's Pinia stores (see /tmp/glkvm-startup-audio/evidence.md): kvm.configState.volumeOn
 // and setVolumeOn, audioMic.state.micMuted and setMicMuted, usbManagement.enableMic and initLoading.
-// Unmuting starts the microphone like the firmware's audio session; a failure re-mutes it.
+// Unmuting starts the microphone like the firmware's audio session; a failure shows the firmware's
+// microphone error dialog and re-mutes it, and a capture that resolves after a mute is stale and stopped.
 // Nothing is played. Options come from localStorage 'fixture-firmware' and apply on load:
 // answerError (the audio answer fails before any microphone request, then re-mutes), answerHang
 // (no microphone request at all), micDelay (ms before the request), keepOnFailure (no re-mute).
 const firmwareScript = `<div id="app"></div><script>
 (() => {
   const options = JSON.parse(localStorage.getItem('fixture-firmware') || '{}');
-  window.firmwareCalls = []; window.micErrors = 0; window.mic = null; window.manualCall = false;
+  window.firmwareCalls = []; window.micErrors = 0; window.mic = null; window.manualCall = false; window.staleMics = 0;
   window.startMic = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false } });
+    if (window.firmware.audioMic.state.micMuted) { stream.getTracks().forEach(track => track.stop()); window.staleMics++; return; }
     const pc = new RTCPeerConnection();
     pc.addTrack(stream.getAudioTracks()[0], stream);
     window.mic = { stream, pc };
   };
   window.stopMic = () => { if (!window.mic) return; window.mic.stream.getTracks().forEach(track => track.stop()); window.mic.pc.close(); window.mic = null; };
+  const failed = () => {
+    window.micErrors++;
+    if (document.querySelector('.mic-permission-error-modal')) return;
+    const modal = document.createElement('div'); modal.className = 'ant-modal-wrap mic-permission-error-modal'; document.body.append(modal);
+  };
   const usb = { enableMic: options.enableMic !== false, initLoading: options.initLoading === true };
   const kvm = { configState: { volumeOn: false, initVideoSessionFinished: false }, isDirectMode: options.direct === true,
     setVolumeOn(on) { window.firmwareCalls.push(['volume', on, window.manualCall ? 'manual' : 'auto']); kvm.configState.volumeOn = on; } };
@@ -40,11 +47,11 @@ const firmwareScript = `<div id="app"></div><script>
       audioMic.state.micMuted = muted;
       if (muted) { window.stopMic(); return; }
       if (!usb.enableMic || kvm.isDirectMode) return;
-      if (options.answerError) { setTimeout(() => { window.micErrors++; audioMic.state.micMuted = true; }, 300); return; }
+      if (options.answerError) { setTimeout(() => { failed(); audioMic.state.micMuted = true; }, 300); return; }
       if (options.answerHang) return;
       const start = () => {
         if (audioMic.state.micMuted) return;
-        window.startMic().catch(() => { window.micErrors++; if (!options.keepOnFailure) audioMic.state.micMuted = true; });
+        window.startMic().catch(() => { failed(); if (!options.keepOnFailure) audioMic.state.micMuted = true; });
       };
       if (options.micDelay) setTimeout(start, options.micDelay); else start();
     } };
@@ -355,8 +362,40 @@ server.listen(0, '127.0.0.1', async () => {
     third.close();
     await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Third'), 'third closed');
 
+    /** @param {Electron.BrowserWindow} win @param {import('../src/audio.cjs').StartupState} state @param {number} since */
+    const reportsOf = (win, state, since) => startupLog.slice(since).filter(([id, status]) => id === win.webContents.id && status.microphoneState === state).length;
+    const micOnCall = async () => (await autoCalls(second)).some(call => call[0] === 'mic' && call[1]);
+
+    // The permission handlers below replace the app's for this connection, so these checks run last.
+    // A manual mute while the real capture request is pending (held at the permission request) is no
+    // failure: it ends the attempt for this session only, and the next video session starts it again.
+    /** @type {((granted: boolean) => void)[]} */
+    const held = [];
+    let hold = true;
+    second.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => { if (permission === 'media' && hold) held.push(callback); else callback(permission === 'media' || permission === 'pointerLock'); });
+    await setStartup({ speaker: false, microphone: false }, { speaker: false, microphone: true });
+    let since = startupLog.length;
+    await reload(second);
+    await waitFor(() => held.length > 0, 'pending microphone request');
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(true))');
+    await waitFor(() => settled(second), 'attempt ended by the manual mute');
+    assert.ok(held.length > 0 && statuses.get(second.webContents.id)?.input !== 'live', 'Ended while the capture was still pending');
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], ['applied', 0, 0], 'A manual mute is no failure');
+    // The stale request completes afterwards: the firmware stops it and the manual mute holds.
+    held.splice(0).forEach(callback => callback(true));
+    await waitFor(() => run(second, 'window.staleMics > 0'), 'stale capture resolved');
+    await waitFor(() => (statuses.get(second.webContents.id)?.openInputs ?? 0) === 0 && statuses.get(second.webContents.id)?.input === 'idle', 'stale capture closed');
+    let state = await firmware(second);
+    assert.deepEqual([await autoCalls(second), state.micMuted, state.micErrors], [[['mic', true, 'auto']], true, 0], 'The manual mute holds');
+    hold = false;
+    startups.delete(second.webContents.id);
+    await run(second, 'window.connect()');
+    await waitFor(() => settled(second) && statuses.get(second.webContents.id)?.input === 'live', 'microphone started in the next session');
+    state = await firmware(second);
+    assert.deepEqual([await autoCalls(second), startup(second)?.microphoneState, state.micMuted, state.micErrors], [[['mic', true, 'auto'], ['mic', true, 'auto']], 'applied', false, 0], 'Started again after reconnect');
+    assert.deepEqual([reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], [0, 0]);
+
     // Permission denied: one attempt, ended, and not repeated for a new video session.
-    // This replaces the app's permission handler for this connection, so it runs last.
     let requests = 0;
     second.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => { if (permission === 'media') requests++; callback(permission === 'pointerLock'); });
     await setStartup({ speaker: false, microphone: false }, { speaker: false, microphone: true });
@@ -370,18 +409,14 @@ server.listen(0, '127.0.0.1', async () => {
     await sleep(1500);
     assert.deepEqual([(await autoCalls(second)).length, requests, startup(second)?.microphoneState], [1, 1, 'denied'], 'No repeated prompt');
 
-    /** @param {Electron.BrowserWindow} win @param {import('../src/audio.cjs').StartupState} state @param {number} since */
-    const reportsOf = (win, state, since) => startupLog.slice(since).filter(([id, status]) => id === win.webContents.id && status.microphoneState === state).length;
-    const micOnCall = async () => (await autoCalls(second)).some(call => call[0] === 'mic' && call[1]);
-
     // A delayed failure of an older attempt does not touch a newer video session: no re-mute, no block.
-    let since = startupLog.length;
+    since = startupLog.length;
     await reload(second, { micDelay: 1500, keepOnFailure: true });
     await waitFor(micOnCall, 'delayed attempt started');
     await run(second, 'window.connect()');
     await waitFor(() => settled(second) && startup(second)?.microphoneState === 'unchanged', 'newer session');
     await sleep(2500);
-    let state = await firmware(second);
+    state = await firmware(second);
     assert.deepEqual([await autoCalls(second), state.micMuted, state.micErrors], [[['mic', true, 'auto']], false, 1], 'The failure arrived after the new session and changed nothing');
     assert.deepEqual([reportsOf(second, 'denied', since), reportsOf(second, 'error', since), startup(second)?.microphoneState], [0, 0, 'unchanged']);
 
@@ -395,8 +430,8 @@ server.listen(0, '127.0.0.1', async () => {
     await sleep(3500);
     state = await firmware(second);
     assert.deepEqual([await autoCalls(second), state.micMuted], [[['mic', true, 'auto']], false], 'The manual microphone stays on');
-    // A mute before any capture cannot be told apart from the firmware ending the attempt: one error report.
-    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since)], ['error', 1]);
+    // The manual mute ended the attempt without a failure: the later failure is not attributed to it.
+    assert.deepEqual([startup(second)?.microphoneState, reportsOf(second, 'error', since), reportsOf(second, 'denied', since)], ['applied', 0, 0]);
 
     // The firmware's audio answer fails before any microphone request and re-mutes: one error, no
     // capture and no prompt, the app does not fight the controls, and a new session does not retry.
@@ -424,7 +459,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual([await autoCalls(second), state.micMuted, requests - before, statuses.get(second.webContents.id)?.openInputs], [[['mic', true, 'auto'], ['mic', false, 'auto']], true, 0, 0], 'Ended once');
 
     assert.equal(first.webContents.isAudioMuted() && second.webContents.isAudioMuted(), true, 'Global mute held throughout');
-    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, bounded transport replacement, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
+    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, bounded transport replacement, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, a manual mute during a pending capture restarted by the next session, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Startups:', JSON.stringify([...startups]), 'Statuses:', JSON.stringify([...statuses]));

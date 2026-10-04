@@ -209,9 +209,10 @@ live video and USB settings are ready; it never changes the device's USB microph
 setting. The microphone turns on only if the USB microphone is enabled on the device and
 the current window state has an available microphone selected here; a saved microphone
 that is still being matched for a newly opened session is awaited for up to 20 seconds.
-Direct H.264 mode has no device audio. A microphone start that is denied, fails, or is
-ended by the device page before capturing is reported once and not retried until the page
-is reloaded. Saving a different address turns off the connection's microphone setting;
+Direct H.264 mode has no device audio. A microphone start that is denied or fails
+(including the device page's own microphone error) is reported once and not retried until
+the page is reloaded. Turning the microphone off on the device page while it is starting
+only applies to that session; the next video session turns it on again. Saving a different address turns off the connection's microphone setting;
 an address that only differs in spelling (such as a trailing slash or letter case) keeps
 it. App muting and the speaker choices still apply. Settings shows the result for each
 open connection.
