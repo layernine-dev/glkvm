@@ -512,7 +512,7 @@ function installAudioRouting(bridge) {
     if (!quiet && outputState === 'ok') { outputState = 'pending'; report(); }
     void refreshOutput();
   };
-  /** @type {WeakMap<HTMLMediaElement, object>} */
+  /** @type {WeakMap<HTMLMediaElement, {cancel(): void}>} */
   const pendingPlays = new WeakMap();
   /** @this {HTMLMediaElement} */
   const gatedPlay = function play() {
@@ -521,17 +521,20 @@ function installAudioRouting(bridge) {
     // A player without audio starts at once, even before the first route.
     if (silent(target) || sinkMatches(target)) return nativePlay.call(this);
     // Start only on the selected speaker, following route changes while waiting; never on the system default.
-    const token = {};
+    /** @type {() => void} */
+    let cancel = () => {};
+    const cancelled = new Promise(resolve => { cancel = () => resolve(undefined); });
+    const token = { cancel };
+    pendingPlays.get(this)?.cancel();
     pendingPlays.set(this, token);
     return (async () => {
-      await firstRoute;
+      await Promise.race([firstRoute, cancelled]);
       if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
       try {
         while (!silent(target) && !sinkMatches(target)) {
           // An initial or superseding unresolved route keeps the window muted,
           // but must not let the player start on the system default either.
-          if (route?.output === null) await nextRoute;
-          else await applySink(target);
+          await Promise.race([route?.output === null ? nextRoute : applySink(target), cancelled]);
           if (pendingPlays.get(this) !== token) throw new DOMException('Playback was cancelled.', 'AbortError');
         }
       } catch {
@@ -545,7 +548,7 @@ function installAudioRouting(bridge) {
     })();
   };
   HTMLMediaElement.prototype.play = gatedPlay;
-  HTMLMediaElement.prototype.pause = function pause() { pendingPlays.delete(this); return nativePause.call(this); };
+  HTMLMediaElement.prototype.pause = function pause() { pendingPlays.get(this)?.cancel(); pendingPlays.delete(this); return nativePause.call(this); };
   Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
     ...srcObject,
     set(value) { /** @type {(value: unknown) => void} */ (srcObject.set).call(this, value); register(this); },

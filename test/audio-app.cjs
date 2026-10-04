@@ -595,7 +595,7 @@ server.listen(0, '127.0.0.1', async () => {
       assert.deepEqual(navigationMutes, [true, true], 'Muted when the navigation starts; the old page cannot unmute it');
       assert.equal(contents.isAudioMuted(), true, 'Muted until the new page confirms its speaker');
       assert.deepEqual(await run(first, "['attached', 'detached', 'paused'].map(name => [window.early.results[name], window.early[name].paused, window.early[name].sinkAtPlay])"),
-        [[undefined, true, undefined], [undefined, true, undefined], [undefined, true, undefined]], 'Audible players wait for the first route, attached or detached');
+        [[undefined, true, undefined], [undefined, true, undefined], ['AbortError', true, undefined]], 'Audible players wait for the first route and pause cancels before any route arrives');
       const unresolvedRoute = heldRoutes.find(args => /** @type {import('../src/audio.cjs').SentRoute} */ (args[0]).output === null);
       assert.ok(unresolvedRoute, 'The new page first receives an unresolved device route');
       send.call(contents, 'glkvm:audio-route', ...unresolvedRoute);
@@ -603,6 +603,8 @@ server.listen(0, '127.0.0.1', async () => {
       await new Promise(resolve => setTimeout(resolve, 200));
       assert.deepEqual(await run(first, "['attached', 'detached'].map(name => [window.early.results[name], window.early[name].paused, window.early[name].sinkAtPlay])"),
         [[undefined, true, undefined], [undefined, true, undefined]], 'An unresolved first route does not start playback on the default speaker');
+      await run(first, "window.early.paused.play().then(() => { window.unresolvedPause = 'playing'; }, error => { window.unresolvedPause = error.name; }); window.early.paused.pause();");
+      await waitFor(() => run(first, "window.unresolvedPause === 'AbortError'"), 'pause cancels while the speaker remains unresolved');
     } finally {
       contents.send = send;
       for (const args of heldRoutes) send.call(contents, 'glkvm:audio-route', ...args);
