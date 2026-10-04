@@ -860,7 +860,9 @@ function installAudioRouting(bridge) {
           // Wait (bounded) for the page's own capture: live, failed, ended by the firmware, or never
           // requested. A pending request, such as the macOS permission prompt, gets longer.
           const started = Date.now();
-          /** @type {'applied' | 'denied' | 'error' | null} */
+          // The firmware ends a failed attempt (a failed capture or audio answer) with this dialog.
+          const failureShown = () => document.querySelector('.mic-permission-error-modal') !== null;
+          /** @type {'applied' | 'denied' | 'error' | 'cancelled' | null} */
           let outcome = null;
           while (!outcome) {
             await sleep(100);
@@ -868,16 +870,24 @@ function installAudioRouting(bridge) {
             const capture = attempt.capture;
             if (attempt.failed) outcome = attempt.failed;
             else if (capture?.state === 'live' && !capture.stopped) outcome = 'applied';
-            // The firmware turned the microphone off again without a live capture (for example a failed answer).
-            else if (!micOn()) outcome = 'error';
+            else if (!micOn()) {
+              // Turned off without a failure or the firmware's dialog (given a moment to appear):
+              // turned off on the page, which ends the attempt for this session only.
+              for (let i = 0; i < 5 && !attempt.failed && !failureShown(); i++) {
+                await sleep(100);
+                if (!fresh()) return;
+              }
+              outcome = attempt.failed || (failureShown() ? 'error' : 'cancelled');
+            }
             else if (Date.now() - started > (capture?.running ? 60000 : 15000)) outcome = 'error';
           }
-          if (outcome !== 'applied') {
+          if (outcome === 'denied' || outcome === 'error') {
             microphoneBlocked = outcome;
             // End an attempt the firmware left on; a microphone it already turned off is not touched.
             if (micOn()) try { setMicrophone(false); } catch {}
           }
-          microphoneState = outcome;
+          // The startup setting was applied; a later session applies it again.
+          microphoneState = outcome === 'cancelled' ? 'applied' : outcome;
         }
       } finally {
         if (microphoneAttempt === attempt) microphoneAttempt = null;
