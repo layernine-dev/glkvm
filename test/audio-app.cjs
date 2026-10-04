@@ -58,8 +58,8 @@ const vendorScript = `<script>
     };
     const video = document.createElement('video'); document.body.append(video);
     video.srcObject = new MediaStream(document.querySelector('#stream-video').srcObject.getVideoTracks());
-    window.early = { attached: player(true, false), detached: player(false, false), paused: player(true, false), becomesVideo: player(true, false), losesAudio: player(false, false), autoplay: player(true, true), video, results: {} };
-    for (const name of ['attached', 'detached', 'paused', 'becomesVideo', 'losesAudio', 'video']) window.early[name].play().then(() => 'playing', error => error.name).then(value => { window.early.results[name] = value; });
+    window.early = { attached: player(true, false), detached: player(false, false), paused: player(true, false), becomesVideo: player(true, false), losesAudio: player(false, false), endsAudio: player(false, false), autoplay: player(true, true), video, results: {} };
+    for (const name of ['attached', 'detached', 'paused', 'becomesVideo', 'losesAudio', 'endsAudio', 'video']) window.early[name].play().then(() => 'playing', error => error.name).then(value => { window.early.results[name] = value; });
     window.early.paused.pause();
   }
 </script></body>`;
@@ -609,6 +609,15 @@ server.listen(0, '127.0.0.1', async () => {
       await waitFor(() => run(first, "window.unresolvedPause === 'AbortError'"), 'pause cancels while the speaker remains unresolved');
       await run(first, 'window.early.losesAudio.srcObject.addTrack(window.early.video.srcObject.getVideoTracks()[0]); window.early.losesAudio.srcObject.removeTrack(window.early.losesAudio.srcObject.getAudioTracks()[0])');
       await waitFor(() => run(first, "window.early.results.losesAudio === 'playing'"), 'removing the last audio track starts video while the speaker remains unresolved');
+      await run(first, `(() => {
+        const frame = document.createElement('iframe'); document.body.append(frame);
+        const stream = window.early.endsAudio.srcObject;
+        stream.addTrack(window.early.video.srcObject.getVideoTracks()[0]);
+        frame.contentWindow.MediaStreamTrack.prototype.stop.call(stream.getAudioTracks()[0]);
+        frame.remove();
+      })()`);
+      await waitFor(() => run(first, "window.early.results.endsAudio === 'playing'"), 'native audio track termination starts video while the speaker remains unresolved');
+      assert.deepEqual(await run(first, "window.early.endsAudio.srcObject.getAudioTracks().map(track => track.readyState)"), ['ended'], 'Ended tracks remain in the stream without blocking video playback');
     } finally {
       contents.send = send;
       for (const args of heldRoutes) send.call(contents, 'glkvm:audio-route', ...args);
