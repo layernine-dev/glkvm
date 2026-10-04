@@ -24,6 +24,7 @@ app.setPath('userData', directory);
 // earlierDialog (the error dialog is already open from before, as after a failed manual capture),
 // retainTrack (like the firmware's audio session, a mute disables the microphone track and an unmute
 // enables it again without a new request; window.connect replaces only the video and keeps it).
+// window.holdVideoInit keeps a new video session unfinished until it is cleared.
 const firmwareScript = `<div id="app"></div><script>
 (() => {
   const options = JSON.parse(localStorage.getItem('fixture-firmware') || '{}');
@@ -69,7 +70,9 @@ const firmwareScript = `<div id="app"></div><script>
   window.manual = action => { window.manualCall = true; try { action(window.firmware); } finally { window.manualCall = false; } };
   // Like the firmware, a new video session is unfinished until its first remote track.
   const connect = window.connect;
-  window.connect = (...args) => { kvm.configState.initVideoSessionFinished = false; connect(...args); setTimeout(() => { kvm.configState.initVideoSessionFinished = true; }, 300); };
+  window.holdVideoInit = false;
+  const finish = () => { if (window.holdVideoInit) setTimeout(finish, 100); else kvm.configState.initVideoSessionFinished = true; };
+  window.connect = (...args) => { kvm.configState.initVideoSessionFinished = false; connect(...args); setTimeout(finish, 300); };
   window.connectDirect = () => {
     document.querySelector('#stream-video')?.remove();
     const canvas = document.createElement('canvas'); canvas.id = 'stream-canvas'; canvas.width = 640; canvas.height = 360;
@@ -415,6 +418,50 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => settled(second), 'retained microphone re-enabled again');
     assert.deepEqual([startup(second)?.microphoneState, (await firmware(second)).micMuted, await run(second, 'window.micRequests'), await run(second, micTrack)], ['applied', false, 1, ['live', true]]);
 
+    // The reverse: a retained microphone left on transmits across a video-only reconnect. With startup
+    // microphone off, the new session mutes it as soon as the stores are usable, before USB and video
+    // initialization or the rate limit: the same track and sender, disabled, without a new capture.
+    // Saving the setting does not mute the running session.
+    await setStartup({ speaker: false, microphone: false }, { speaker: false, microphone: false });
+    await sleep(1000);
+    assert.deepEqual([(await firmware(second)).micMuted, await run(second, micTrack)], [false, ['live', true]], 'Saving does not mute the running session');
+    await run(second, 'window.retained = { track: window.mic.stream.getAudioTracks()[0], sender: window.mic.pc.getSenders()[0] }');
+    const retainedKept = "window.mic.stream.getAudioTracks()[0] === window.retained.track && window.mic.pc.getSenders()[0] === window.retained.sender && window.retained.sender.track === window.retained.track";
+    const offCalls = async () => (await autoCalls(second)).filter(call => call[0] === 'mic' && !call[1]).length;
+    /** @param {string} script @param {number} count @param {string} label */
+    const mutedEarly = async (script, count, label) => {
+      startups.delete(second.webContents.id);
+      await run(second, script);
+      await waitFor(async () => await offCalls() === count && startup(second)?.microphoneState === 'applied', label);
+      assert.deepEqual([startup(second)?.speakerState, (await firmware(second)).micMuted, await run(second, micTrack), await run(second, 'window.micRequests'), await run(second, retainedKept)],
+        ['waiting', true, ['live', false], 1, true], `${label}: muted before initialization, no new capture`);
+    };
+    // Stalled USB initialization: muted at once; a manual unmute in the same session survives later
+    // ticks and the completed startup.
+    since = startupLog.length;
+    await mutedEarly('window.firmware.usb.initLoading = true; window.connect()', 1, 'muted while USB initializes');
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(false))');
+    await sleep(1000);
+    await run(second, 'window.firmware.usb.initLoading = false');
+    await waitFor(() => settled(second), 'startup after USB initialization');
+    await sleep(1000);
+    assert.deepEqual(startup(second), { speaker: false, microphone: false, speakerState: 'applied', microphoneState: 'applied' });
+    assert.deepEqual([await offCalls(), (await firmware(second)).micMuted, await run(second, micTrack), await run(second, retainedKept)], [1, false, ['live', true], true], 'The manual unmute stays');
+    // Stalled video initialization: muted at once; the bounded wait reports the microphone result
+    // without muting again, and a manual unmute meanwhile stays.
+    await mutedEarly('window.holdVideoInit = true; window.connect()', 2, 'muted while video initializes');
+    await run(second, 'window.manual(({ audioMic }) => audioMic.setMicMuted(false))');
+    await waitFor(() => settled(second), 'video initialization timed out', 350);
+    assert.deepEqual(startup(second), { speaker: false, microphone: false, speakerState: 'error', microphoneState: 'applied' });
+    assert.deepEqual([await offCalls(), (await firmware(second)).micMuted, await run(second, micTrack), await run(second, retainedKept)], [2, false, ['live', true], true], 'No second mute after the timeout');
+    // Recovery: the next session mutes again and completes.
+    startups.delete(second.webContents.id);
+    await run(second, 'window.holdVideoInit = false; window.connect()');
+    await waitFor(() => settled(second), 'next session after the timeout');
+    assert.deepEqual(startup(second), { speaker: false, microphone: false, speakerState: 'unchanged', microphoneState: 'applied' });
+    assert.deepEqual([await offCalls(), (await firmware(second)).micMuted, await run(second, micTrack), await run(second, 'window.micRequests'), await run(second, retainedKept)], [3, true, ['live', false], 1, true]);
+    assert.deepEqual([reportsOf(second, 'error', since), reportsOf(second, 'denied', since), (await firmware(second)).micErrors], [0, 0, 0]);
+
     // The permission handlers below replace the app's for this connection, so these checks run last.
     // A manual mute while the real capture request is pending (held at the permission request) is no
     // failure: it ends the attempt for this session only, and the next video session starts it again.
@@ -528,7 +575,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual([await autoCalls(second), state.micMuted, requests - before, statuses.get(second.webContents.id)?.openInputs], [[['mic', true, 'auto'], ['mic', false, 'auto']], true, 0, 0], 'Ended once');
 
     assert.equal(first.webContents.isAudioMuted() && second.webContents.isAudioMuted(), true, 'Global mute held throughout');
-    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, rate-limited transport replacement that recovers past twenty sessions, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, a retained muted microphone track re-enabled after a video-only replacement without a request, failure or re-mute past 15 s, a manual mute during a pending capture restarted by the next session, also beside an earlier error dialog, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
+    console.log('PASS: startup audio defaults and idempotence, fake-device gate, settings switches, all four combinations on two connections, no change on save, once per session, manual changes across focus/routes/audio-only reconnect/buffering, reapply after a new video session and after sign-in, rate-limited transport replacement that recovers past twenty sessions, viewers only, delayed stores and USB initialization, USB microphone off, disabled and bounded missing microphone, Direct mode, same-origin address edits and a new origin, a saved microphone awaited while its new session is mapped, a retained muted microphone track re-enabled after a video-only replacement without a request, failure or re-mute past 15 s, a retained live microphone muted before stalled USB or video initialization with the same track and sender, manual unmute kept through completion and timeout, muted again next session, a manual mute during a pending capture restarted by the next session, also beside an earlier error dialog, single denied attempt, delayed failures across a new session and manual changes, a failed and a missing firmware answer, global mute and routing preserved');
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Startups:', JSON.stringify([...startups]), 'Statuses:', JSON.stringify([...statuses]));

@@ -790,7 +790,8 @@ function installAudioRouting(bridge) {
   let startupTimer = null;
   /** The session already handled; marked before any setter runs. @type {object | null} */
   let handledSession = null;
-  /** @type {{session: object, wanted: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}, since: number} | null} */
+  /** The session waiting to apply, with its early microphone-off result once the stores were usable.
+   * @type {{session: object, wanted: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}, since: number, microphone: import('./audio.cjs').StartupState | null} | null} */
   let pendingStartup = null;
   let startupRuns = 0;
   /** When recent sessions started applying: at most five per five seconds. @type {number[]} */
@@ -824,6 +825,12 @@ function installAudioRouting(bridge) {
     const canvas = document.querySelector('#stream-canvas');
     return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 ? canvas : null;
   };
+  /** @param {() => boolean} current @param {boolean} value @param {(value: boolean) => void} set @returns {import('./audio.cjs').StartupState} */
+  const apply = (current, value, set) => {
+    if (current() === value) return 'unchanged';
+    try { set(value); } catch { return 'error'; }
+    return current() === value ? 'applied' : 'error';
+  };
   /** @param {{speaker: boolean, microphone: boolean}} wanted @param {import('./audio.cjs').StartupState} speakerState @param {import('./audio.cjs').StartupState} microphoneState */
   const reportStartup = (wanted, speakerState, microphoneState) => bridge.startup({ speaker: wanted.speaker, microphone: wanted.microphone, speakerState, microphoneState });
   function startupTick() {
@@ -832,18 +839,27 @@ function installAudioRouting(bridge) {
     if (!session || session === handledSession) return;
     if (pendingStartup?.session !== session) {
       // A newer setting applies to the next session only; this one keeps its snapshot.
-      pendingStartup = { session, wanted: { ...startup }, since: Date.now() };
+      pendingStartup = { session, wanted: { ...startup }, since: Date.now(), microphone: null };
       reportStartup(pendingStartup.wanted, 'waiting', 'waiting');
     }
     const { wanted, since } = pendingStartup;
-    const signingIn = [...document.querySelectorAll('input[type="password"]')].some(input => input.getBoundingClientRect().width > 0);
     const stores = firmware();
+    // A microphone the firmware's audio session kept on across a video-only reconnect transmits
+    // until startup applies, so microphone off applies as soon as the stores are usable, before
+    // the waits and the rate limit below. Once per session: a manual change afterwards stays.
+    if (!wanted.microphone && stores && pendingStartup.microphone === null && field(stores.kvm, 'isDirectMode') !== true) {
+      const { mic, micState } = stores;
+      pendingStartup.microphone = apply(() => field(micState, 'micMuted') === false, false, on => invoke(mic, 'setMicMuted', !on));
+      reportStartup(wanted, 'waiting', pendingStartup.microphone);
+    }
+    const { microphone } = pendingStartup;
+    const signingIn = [...document.querySelectorAll('input[type="password"]')].some(input => input.getBoundingClientRect().width > 0);
     if (signingIn || !stores || field(stores.usb, 'initLoading') !== false || field(stores.config, 'initVideoSessionFinished') !== true) {
       if (Date.now() - since < 30000) return;
       // Bounded: report once and wait for the next session instead of retrying.
       handledSession = session; pendingStartup = null;
       const state = stores ? 'error' : 'unsupported';
-      reportStartup(wanted, state, state);
+      reportStartup(wanted, state, microphone ?? state);
       return;
     }
     // Bounds a firmware that keeps replacing its video track: a session over the limit stays
@@ -853,25 +869,20 @@ function installAudioRouting(bridge) {
     if (startupStarts.length >= 5) return;
     startupStarts.push(now);
     handledSession = session; pendingStartup = null;
-    void applyStartup(stores, session, wanted, ++startupRuns);
+    void applyStartup(stores, session, wanted, ++startupRuns, microphone);
   }
   const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
-  /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {object} session @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run */
-  const applyStartup = async ({ kvm, config, mic, micState, usb }, session, wanted, run) => {
+  /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {object} session @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run
+   * @param {import('./audio.cjs').StartupState | null} early The session's microphone-off result, already applied. */
+  const applyStartup = async ({ kvm, config, mic, micState, usb }, session, wanted, run, early) => {
     const volumeOn = () => field(config, 'volumeOn') === true;
     const micOn = () => field(micState, 'micMuted') === false;
     // Checked after every wait, before anything is changed or reported: a newer session reports for itself.
     const fresh = () => run === startupRuns && videoSession() === session;
-    /** @param {() => boolean} current @param {boolean} value @param {(value: boolean) => void} set @returns {import('./audio.cjs').StartupState} */
-    const apply = (current, value, set) => {
-      if (current() === value) return 'unchanged';
-      try { set(value); } catch { return 'error'; }
-      return current() === value ? 'applied' : 'error';
-    };
     const setMicrophone = (/** @type {boolean} */ on) => invoke(mic, 'setMicMuted', !on);
     // The firmware has no sound or microphone in Direct H.264 mode.
     if (field(kvm, 'isDirectMode') === true) {
-      reportStartup(wanted, volumeOn() === wanted.speaker ? 'unchanged' : 'unsupported', micOn() === wanted.microphone ? 'unchanged' : 'unsupported');
+      reportStartup(wanted, volumeOn() === wanted.speaker ? 'unchanged' : 'unsupported', early ?? (micOn() === wanted.microphone ? 'unchanged' : 'unsupported'));
       return;
     }
     const speakerState = apply(volumeOn, wanted.speaker, on => invoke(kvm, 'setVolumeOn', on));
@@ -886,7 +897,8 @@ function installAudioRouting(bridge) {
     }
     /** @type {import('./audio.cjs').StartupState} */
     let microphoneState;
-    if (!wanted.microphone || micOn()) microphoneState = apply(micOn, wanted.microphone, setMicrophone);
+    if (early) microphoneState = early;
+    else if (!wanted.microphone || micOn()) microphoneState = apply(micOn, wanted.microphone, setMicrophone);
     // Only with the device's USB microphone on and a microphone selected for the current window state.
     else if (field(usb, 'enableMic') !== true || !route?.inputAllowed || route.input === null || route.inputMissing) microphoneState = 'unavailable';
     else if (!wanted.microphoneAccess) microphoneState = 'denied';
