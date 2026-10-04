@@ -388,7 +388,7 @@ window.addEventListener('DOMContentLoaded', () => {
  * scripts, because the vendor player owns capture and playback there. This
  * function is serialized: it must not reference anything outside its body.
  * The bridge is only reachable from this closure; nothing is added to `window`.
- * @param {{subscribe(onRoute: (route: import('./audio.cjs').SentRoute) => void, onRefresh: () => void): void, devices(list: {kind: string, deviceId: string, label: string}[]): void, status(status: import('./audio.cjs').AudioStatus): void}} bridge
+ * @param {{subscribe(onRoute: (route: import('./audio.cjs').SentRoute) => void, onRefresh: () => void, onStartup: (startup: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}) => void): void, devices(list: {kind: string, deviceId: string, label: string}[]): void, status(status: import('./audio.cjs').AudioStatus): void, startup(status: import('./audio.cjs').StartupStatus): void}} bridge
  */
 function installAudioRouting(bridge) {
   const mediaDevices = navigator.mediaDevices;
@@ -559,6 +559,9 @@ function installAudioRouting(bridge) {
   const openStreams = new Set();
   /** @type {Capture | null} */
   let latest = null;
+  /** Microphone requests the page could not start, by reason; read by the startup check.
+   * @type {{denied: number, error: number}} */
+  const captureFailures = { denied: 0, error: 0 };
   /** @param {MediaStream} stream */
   const release = stream => { stream.getTracks().forEach(track => nativeStop.call(track)); openStreams.delete(stream); };
   /** @param {Capture} capture */
@@ -668,7 +671,7 @@ function installAudioRouting(bridge) {
   const createCapture = async audio => {
     const timeout = new Promise(resolve => setTimeout(resolve, 5000));
     await Promise.race([firstRoute, timeout]);
-    if (!route?.inputAllowed) throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError');
+    if (!route?.inputAllowed) { captureFailures.denied++; throw new DOMException('Microphone access is disabled for this connection.', 'NotAllowedError'); }
     const base = audio && typeof audio === 'object' ? { ...audio } : {};
     delete base.deviceId; delete base.groupId;
     const context = new NativeAudioContext(/** @type {AudioContextOptions} */ ({ latencyHint: 'interactive', sinkId: { type: 'none' } }));
@@ -682,6 +685,7 @@ function installAudioRouting(bridge) {
     await reconcile(capture);
     if (capture.state === 'denied' || capture.state === 'error') {
       const state = capture.state;
+      captureFailures[state]++;
       stopCapture(capture);
       throw new DOMException(state === 'denied' ? 'Microphone permission was denied.' : 'The microphone could not be started.', state === 'denied' ? 'NotAllowedError' : 'NotReadableError');
     }
@@ -730,24 +734,147 @@ function installAudioRouting(bridge) {
     // Microphone IDs are only exposed while a microphone is enabled for this connection.
     if (!previous || previous.inputAllowed !== current.inputAllowed) void reportDevices();
     report();
-  }, () => { void reportDevices(); });
+    startupTick();
+  }, () => { void reportDevices(); }, next => {
+    startup = { speaker: next.speaker === true, microphone: next.microphone === true, microphoneAccess: next.microphoneAccess === true };
+    startupTimer ||= setInterval(startupTick, 500);
+    startupTick();
+  });
+
+  // Startup state for the device page's own Sound and Microphone controls, applied once per
+  // video session: a new page, or a new live video track after a reconnect. Buffering, focus,
+  // speaker or audio-only changes keep the session, so later manual changes stay untouched.
+  // Only the firmware's own setters are used (kvm.setVolumeOn, audioMic.setMicMuted); its USB
+  // device configuration and reconnect callback are never touched.
+  /** @type {{speaker: boolean, microphone: boolean, microphoneAccess: boolean} | null} */
+  let startup = null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let startupTimer = null;
+  /** The session already handled; marked before any setter runs. @type {object | null} */
+  let handledSession = null;
+  /** @type {{session: object, wanted: {speaker: boolean, microphone: boolean, microphoneAccess: boolean}, since: number} | null} */
+  let pendingStartup = null;
+  let startupRuns = 0;
+  // One failed microphone start per page: no repeated permission prompts or firmware dialogs.
+  let microphoneBlocked = false;
+  /** @param {unknown} value @param {string} key @returns {unknown} */
+  const field = (value, key) => value && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value)[key] : undefined;
+  /** @param {unknown} target @param {string} name @param {boolean} value */
+  const invoke = (target, name, value) => { Reflect.apply(/** @type {Function} */ (field(target, name)), target, [value]); };
+  /** The firmware's Pinia stores, once the player has mounted them. */
+  const firmware = () => {
+    const pinia = field(field(field(field(document.querySelector('#app'), '__vue_app__'), 'config'), 'globalProperties'), '$pinia');
+    const registry = field(pinia, '_s');
+    if (!(registry instanceof Map)) return null;
+    const kvm = registry.get('kvm'), mic = registry.get('audioMic'), usb = registry.get('usbManagement');
+    const config = field(kvm, 'configState'), micState = field(mic, 'state');
+    if (typeof field(kvm, 'setVolumeOn') !== 'function' || typeof field(config, 'volumeOn') !== 'boolean' || typeof field(config, 'initVideoSessionFinished') !== 'boolean'
+      || typeof field(mic, 'setMicMuted') !== 'function' || typeof field(micState, 'micMuted') !== 'boolean' || typeof field(usb, 'initLoading') !== 'boolean') return null;
+    return { kvm, config, mic, micState, usb };
+  };
+  /** The live video track, or the Direct H.264 canvas, identifies the current video session. */
+  const videoSession = () => {
+    const video = document.querySelector('#stream-video');
+    if (video instanceof HTMLVideoElement) {
+      const stream = srcObject.get?.call(video);
+      const track = stream instanceof NativeMediaStream ? stream.getVideoTracks().find(item => item.readyState === 'live') : undefined;
+      return track && video.videoWidth > 0 ? track : null;
+    }
+    const canvas = document.querySelector('#stream-canvas');
+    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 ? canvas : null;
+  };
+  /** @param {{speaker: boolean, microphone: boolean}} wanted @param {import('./audio.cjs').StartupState} speakerState @param {import('./audio.cjs').StartupState} microphoneState */
+  const reportStartup = (wanted, speakerState, microphoneState) => bridge.startup({ speaker: wanted.speaker, microphone: wanted.microphone, speakerState, microphoneState });
+  function startupTick() {
+    if (!startup || !route) return;
+    const session = videoSession();
+    if (!session || session === handledSession) return;
+    if (pendingStartup?.session !== session) {
+      // A newer setting applies to the next session only; this one keeps its snapshot.
+      pendingStartup = { session, wanted: { ...startup }, since: Date.now() };
+      reportStartup(pendingStartup.wanted, 'waiting', 'waiting');
+    }
+    const { wanted, since } = pendingStartup;
+    const signingIn = [...document.querySelectorAll('input[type="password"]')].some(input => input.getBoundingClientRect().width > 0);
+    const stores = firmware();
+    if (signingIn || !stores || field(stores.usb, 'initLoading') !== false || field(stores.config, 'initVideoSessionFinished') !== true) {
+      if (Date.now() - since < 30000) return;
+      // Bounded: report once and wait for the next session instead of retrying.
+      handledSession = session; pendingStartup = null;
+      const state = stores ? 'error' : 'unsupported';
+      reportStartup(wanted, state, state);
+      return;
+    }
+    handledSession = session; pendingStartup = null;
+    // Bounds a firmware that keeps replacing its video track.
+    if (++startupRuns > 20) return;
+    void applyStartup(stores, wanted, startupRuns);
+  }
+  /** @param {NonNullable<ReturnType<typeof firmware>>} stores @param {{speaker: boolean, microphone: boolean, microphoneAccess: boolean}} wanted @param {number} run */
+  const applyStartup = async ({ kvm, config, mic, micState, usb }, wanted, run) => {
+    const volumeOn = () => field(config, 'volumeOn') === true;
+    const micOn = () => field(micState, 'micMuted') === false;
+    /** @param {() => boolean} current @param {boolean} value @param {(value: boolean) => void} set @returns {import('./audio.cjs').StartupState} */
+    const apply = (current, value, set) => {
+      if (current() === value) return 'unchanged';
+      try { set(value); } catch { return 'error'; }
+      return current() === value ? 'applied' : 'error';
+    };
+    const setMicrophone = (/** @type {boolean} */ on) => invoke(mic, 'setMicMuted', !on);
+    // The firmware has no sound or microphone in Direct H.264 mode.
+    if (field(kvm, 'isDirectMode') === true) {
+      reportStartup(wanted, volumeOn() === wanted.speaker ? 'unchanged' : 'unsupported', micOn() === wanted.microphone ? 'unchanged' : 'unsupported');
+      return;
+    }
+    const speakerState = apply(volumeOn, wanted.speaker, on => invoke(kvm, 'setVolumeOn', on));
+    /** @type {import('./audio.cjs').StartupState} */
+    let microphoneState;
+    if (!wanted.microphone || micOn()) microphoneState = apply(micOn, wanted.microphone, setMicrophone);
+    // Only with the device's USB microphone on and a microphone selected for the current window state.
+    else if (field(usb, 'enableMic') !== true || !route?.inputAllowed || route.input === null || route.inputMissing) microphoneState = 'unavailable';
+    else if (!wanted.microphoneAccess || microphoneBlocked) microphoneState = 'denied';
+    else {
+      const failures = { ...captureFailures };
+      microphoneState = apply(micOn, true, setMicrophone);
+      reportStartup(wanted, speakerState, microphoneState === 'applied' ? 'waiting' : microphoneState);
+      if (microphoneState !== 'applied') return;
+      // Wait (bounded) for the page's capture to start or fail.
+      for (let i = 0; i < 30 && latest?.state !== 'live'; i++) {
+        if (captureFailures.denied > failures.denied || captureFailures.error > failures.error) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      if (captureFailures.denied > failures.denied || captureFailures.error > failures.error) {
+        microphoneBlocked = true;
+        microphoneState = captureFailures.denied > failures.denied ? 'denied' : 'error';
+        // End the attempt; the firmware normally does this itself after a failure.
+        if (micOn()) try { setMicrophone(false); } catch {}
+      }
+      // A newer session reports for itself.
+      if (run !== startupRuns) return;
+    }
+    reportStartup(wanted, speakerState, microphoneState);
+  };
 }
 
 /** @type {((route: unknown) => void) | null} */
 let audioRouteListener = null;
 /** @type {(() => void) | null} */
 let audioRefreshListener = null;
+/** @type {((startup: unknown) => void) | null} */
+let audioStartupListener = null;
 try {
   contextBridge.executeInMainWorld({
     func: installAudioRouting,
     args: [{
-      subscribe: (/** @type {(route: unknown) => void} */ onRoute, /** @type {() => void} */ onRefresh) => { audioRouteListener = onRoute; audioRefreshListener = onRefresh; },
+      subscribe: (/** @type {(route: unknown) => void} */ onRoute, /** @type {() => void} */ onRefresh, /** @type {(startup: unknown) => void} */ onStartup) => { audioRouteListener = onRoute; audioRefreshListener = onRefresh; audioStartupListener = onStartup; },
       devices: (/** @type {unknown} */ list) => ipcRenderer.send('glkvm:audio-devices', list),
       status: (/** @type {unknown} */ status) => ipcRenderer.send('glkvm:audio-status', status),
+      startup: (/** @type {unknown} */ status) => ipcRenderer.send('glkvm:audio-startup-status', status),
     }],
   });
   ipcRenderer.on('glkvm:audio-route', (_event, route) => audioRouteListener?.(route));
   ipcRenderer.on('glkvm:audio-refresh', () => audioRefreshListener?.());
+  ipcRenderer.on('glkvm:audio-startup', (_event, startup) => audioStartupListener?.(startup));
   ipcRenderer.send('glkvm:audio-ready');
 } catch {
   // Without the adapter, the main process keeps this window muted.

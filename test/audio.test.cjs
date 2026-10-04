@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { defaults, validateConfig } = require('../src/config.cjs');
 const { prepareConfig } = require('../src/credentials.cjs');
-const { defaultAudio, validateAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, nextRoute, routeChanged, outputRouted } = require('../src/audio.cjs');
+const { defaultAudio, validateAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, validateStartupStatus, nextRoute, routeChanged, outputRouted } = require('../src/audio.cjs');
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('../src/device-ids.cjs');
 const { parseCatalog, deviceLabels } = require('../src/audio-catalog.cjs');
 const { createHmac } = require('node:crypto');
@@ -129,7 +129,7 @@ test('device labels are unique, valid settings labels and independent of list or
       const label = /** @type {string} */ (labels.get(device.uid));
       assert.ok(label.length <= 120 && wellFormed(label), label);
       // The selectable choice saves and reloads by UID with its label.
-      const audio = { foreground: { input: { uid: device.uid, label }, output: 'default' }, background: defaultAudio().background };
+      const audio = { foreground: { input: { uid: device.uid, label }, output: 'default' }, background: defaultAudio().background, startup: defaultAudio().startup };
       assert.deepEqual(validateAudio(JSON.parse(JSON.stringify(validateAudio(audio)))), audio);
     }
     return [...labels.values()];
@@ -239,4 +239,45 @@ test('speaker confirmations unmute only for the current output generation', () =
   state = nextRoute(state, { ...routeA, output: null }, 6);
   assert.equal(outputRouted(state, { ...ack(a, 6), output: /** @type {string} */ (/** @type {unknown} */ (null)) }), false, 'An unresolved speaker is never confirmed');
   assert.equal(routeChanged(state, { ...routeA, output: null, inputMissing: true }), true);
+});
+
+test('startup sound and microphone default off, are strictly validated and never inferred', () => {
+  const legacy = defaults();
+  delete legacy.devices[0].audio;
+  assert.deepEqual(validateConfig(legacy).devices[0].audio?.startup, { speaker: false, microphone: false });
+  const withMic = { foreground: { input: mic, output: speaker }, background: { input: 'default', output: 'default' } };
+  assert.deepEqual(validateAudio(withMic).startup, { speaker: false, microphone: false }, 'A selected microphone does not turn on the microphone at connect');
+  for (const startup of [{ speaker: true, microphone: false }, { speaker: false, microphone: true }, { speaker: true, microphone: true }, { speaker: false, microphone: false }]) {
+    assert.deepEqual(validateAudio({ ...withMic, startup: { ...startup, extra: 1 } }).startup, startup);
+  }
+  for (const startup of [null, 'on', true, {}, { speaker: true }, { speaker: 'true', microphone: false }, { speaker: 1, microphone: 0 }, { speaker: false, microphone: null }]) {
+    assert.throws(() => validateAudio({ ...withMic, startup }), /startup audio/);
+  }
+});
+
+test('startup settings are kept per connection on rename, cleared for the microphone on an address change, and removed with the connection', async () => {
+  const both = { foreground: { input: mic, output: speaker }, background: { input: 'default', output: 'default' }, startup: { speaker: true, microphone: true } };
+  const previous = validateConfig({ ...defaults(), devices: [
+    { id: 'a', name: 'A', origin: 'https://a.test', openAtStartup: true, audio: both },
+    { id: 'b', name: 'B', origin: 'https://b.test', openAtStartup: true, audio: { ...both, startup: { speaker: false, microphone: true } } },
+  ] });
+  const renamed = await prepareConfig({ ...previous, devices: [{ ...previous.devices[0], name: 'Renamed' }, previous.devices[1]] }, previous, storage);
+  assert.deepEqual(renamed.devices.map(device => device.audio?.startup), [{ speaker: true, microphone: true }, { speaker: false, microphone: true }]);
+  const moved = await prepareConfig({ ...previous, devices: [{ ...previous.devices[0], origin: 'https://elsewhere.test' }, previous.devices[1]] }, previous, storage);
+  assert.deepEqual(moved.devices[0].audio?.startup, { speaker: true, microphone: false }, 'A new address never starts the microphone automatically');
+  assert.deepEqual(moved.devices[0].audio?.foreground, both.foreground, 'Device choices are kept');
+  assert.deepEqual(moved.devices[1].audio?.startup, { speaker: false, microphone: true }, 'Other connections are unaffected');
+  const added = await prepareConfig({ ...previous, devices: [...previous.devices, { id: 'c', name: 'C', origin: 'https://c.test', openAtStartup: true, audio: both }] }, previous, storage);
+  assert.deepEqual(added.devices[2].audio?.startup, both.startup, 'A new connection keeps its explicit choice');
+  const removed = await prepareConfig({ ...previous, devices: [previous.devices[1]] }, previous, storage);
+  assert.deepEqual(removed.devices.map(device => device.id), ['b']);
+  const readded = await prepareConfig({ ...removed, devices: [...removed.devices, { id: 'a', name: 'A', origin: 'https://a.test', openAtStartup: true }] }, removed, storage);
+  assert.deepEqual(readded.devices[1].audio?.startup, { speaker: false, microphone: false }, 'Removing a connection removes its startup settings');
+});
+
+test('startup status reports from the page are validated', () => {
+  const ok = { speaker: true, microphone: false, speakerState: 'applied', microphoneState: 'unchanged' };
+  assert.deepEqual(validateStartupStatus({ ...ok, extra: 'x' }), ok);
+  for (const state of ['waiting', 'applied', 'unchanged', 'unsupported', 'unavailable', 'denied', 'error']) assert.ok(validateStartupStatus({ ...ok, microphoneState: state }));
+  for (const bad of [null, 'applied', { ...ok, speaker: 'true' }, { ...ok, speakerState: 'on' }, { ...ok, microphoneState: undefined }, { ...ok, microphone: 1 }]) assert.equal(validateStartupStatus(bad), null);
 });

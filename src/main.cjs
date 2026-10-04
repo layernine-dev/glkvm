@@ -11,14 +11,14 @@ const { defaults, readConfig, writeConfig, partitionFor } = require('./config.cj
 const { publicConfig, prepareConfig, readPassword } = require('./credentials.cjs');
 const { fingerprint, isPinned } = require('./certificates.cjs');
 const { scales, windowSize } = require('./window-sizes.cjs');
-const { defaultAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, nextRoute, routeChanged, outputRouted } = require('./audio.cjs');
+const { defaultAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, validateStartupStatus, nextRoute, routeChanged, outputRouted } = require('./audio.cjs');
 const { watchCatalog, catalogPath, deviceLabels } = require('./audio-catalog.cjs');
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./device-ids.cjs');
 
 const { keyboardAction } = require('./keyboard.cjs');
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -230,12 +230,12 @@ function syncAudio() {
 }
 /** Settings lists every native device, whether or not a connection is open. */
 function audioSnapshot() {
-  /** @type {Record<string, {foreground: boolean, preparing: boolean, status: import('./audio.cjs').AudioStatus | null}>} */
+  /** @type {Record<string, {foreground: boolean, preparing: boolean, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null}>} */
   const connections = {};
   for (const entry of windows.values()) {
     if (entry.window.isDestroyed()) continue;
     const route = currentRoute(entry);
-    connections[entry.device.id] = { foreground: isForeground(entry), preparing: (route.inputMissing || route.output === null) && !entry.audio.salt, status: entry.audio.status };
+    connections[entry.device.id] = { foreground: isForeground(entry), preparing: (route.inputMissing || route.output === null) && !entry.audio.salt, status: entry.audio.status, startup: entry.audio.startup };
   }
   /** @param {'input' | 'output'} kind */
   const list = kind => {
@@ -253,6 +253,16 @@ function sendSettingsAudio() {
     settingsAudioQueued = false;
     if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send('glkvm:settings-audio', audioSnapshot());
   });
+}
+/** Startup state for the device page's own Sound and Microphone controls. The page applies it
+ * once per video session; a newer value only applies to the next one. Sent only to a viewer's
+ * page with a ready audio adapter, never to login helpers.
+ * @param {Entry} entry */
+function sendStartup(entry) {
+  if (entry.window.isDestroyed() || !isViewer(entry) || !entry.audio.ready || !config.devices.includes(entry.device) || !isDeviceURL(entry.window.webContents.getURL(), entry.device)) return;
+  const startup = (entry.device.audio || defaultAudio()).startup;
+  const microphoneAccess = !['denied', 'restricted'].includes(systemPreferences.getMediaAccessStatus('microphone'));
+  entry.window.webContents.send('glkvm:audio-startup', { speaker: startup.speaker, microphone: startup.microphone, microphoneAccess });
 }
 
 /** @param {Device} device @param {boolean} [consoleWindow] @param {boolean} [background] */
@@ -293,7 +303,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, salt: null, saltAttempts: 0, saltTimer: null } };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
   updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
@@ -469,6 +479,7 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
     }
     for (const entry of windows.values()) {
       entry.audio.saltAttempts = 0;
+      sendStartup(entry);
       if (entry.needsLogin && entry.device.encryptedPassword) showDevice(entry.device, true, true);
     }
     migrateLegacyChoices();
@@ -516,8 +527,9 @@ ipcMain.on('glkvm:audio-ready', event => {
   const entry = deviceSender(event);
   if (!entry || !isViewer(entry)) return;
   if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer);
-  entry.audio = { ready: true, route: null, outputGeneration: 0, devices: null, status: null, salt: null, saltAttempts: 0, saltTimer: null };
+  entry.audio = { ready: true, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null };
   syncAudio();
+  sendStartup(entry);
 });
 ipcMain.on('glkvm:audio-devices', (event, list) => {
   const entry = deviceSender(event);
@@ -535,6 +547,13 @@ ipcMain.on('glkvm:audio-status', (event, value) => {
   if (!entry || !isViewer(entry) || !entry.audio.ready || !status) return;
   entry.audio.status = status;
   applyMute(entry);
+  sendSettingsAudio();
+});
+ipcMain.on('glkvm:audio-startup-status', (event, value) => {
+  const entry = deviceSender(event);
+  const status = validateStartupStatus(value);
+  if (!entry || !isViewer(entry) || !entry.audio.ready || !status) return;
+  entry.audio.startup = status;
   sendSettingsAudio();
 });
 ipcMain.on('glkvm:ready', event => { const entry = deviceSender(event); if (entry) sendMode(entry); });

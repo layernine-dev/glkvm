@@ -124,7 +124,7 @@ void (async () => {
     })()`);
     await waitFor(() => run(settings, "document.querySelector('#save-status').textContent === 'Changes saved'"), 'saved choices');
     const saved = JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8'));
-    assert.deepEqual(saved.devices.map((/** @type {any} */ device) => device.audio), [0, 1].map(() => ({ foreground: { input: 'disabled', output: { uid: 'fake_audio_output_2', label: 'Fake Audio Output 2' } }, background: { input: 'disabled', output: { uid: 'fake_audio_output_2', label: 'Fake Audio Output 2' } } })), 'Saved by native UID');
+    assert.deepEqual(saved.devices.map((/** @type {any} */ device) => device.audio), [0, 1].map(() => ({ foreground: { input: 'disabled', output: { uid: 'fake_audio_output_2', label: 'Fake Audio Output 2' } }, background: { input: 'disabled', output: { uid: 'fake_audio_output_2', label: 'Fake Audio Output 2' } }, startup: { speaker: false, microphone: false } })), 'Saved by native UID');
 
     // 3. Open both: each fresh session creates and persists its own salt.
     const opened = Date.now();

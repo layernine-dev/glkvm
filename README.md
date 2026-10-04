@@ -199,6 +199,19 @@ muting in Controls still applies on top of these choices.
 macOS asks once for microphone access for GLKVM Clean the first time a device page
 turns on a microphone that is enabled here.
 
+**Turn on device sound / microphone when connecting** (both off by default, also for
+existing connections) set the device page's own Sound and Microphone controls when a
+video session starts: a new page load, a sign-in, or a reconnect with a new video
+stream. Saving does not change a running session, and changes made on the device page
+afterwards are kept through focus, speaker or audio-only changes. The app uses the
+firmware's own controls (`kvm.setVolumeOn`, `audioMic.setMicMuted`) once its player,
+live video and USB settings are ready; it never changes the device's USB microphone
+setting. The microphone turns on only if the USB microphone is enabled on the device and
+the current window state has an available microphone selected here. Direct H.264 mode has
+no device audio. A denied microphone is not retried until the page is reloaded. Changing
+a connection's address turns off its microphone setting. App muting and the speaker
+choices still apply. Settings shows the result for each open connection.
+
 The **Controls** page sets the default keyboard/mouse mode and app audio muting.
 Changing the default input mode also applies it to open KVM windows. The per-window
 menu toggle lasts until the window closes or that default changes. App audio
@@ -280,7 +293,8 @@ new audio contexts, refused playback when a speaker cannot be applied, players
 waiting across a speaker change, copies of the microphone track or stream and
 stops from other frames,
 disabling and re-enabling a connection's microphone, re-listing device names, and
-disabling while a slower device request is pending. Real hardware, unplugging a device, and the
+disabling while a slower device request is pending. The startup audio GUI test uses a scripted copy of
+the firmware's stores with the same fake devices, behind the same safety gate. Real hardware, unplugging a device, and the
 firmware's own microphone button still need a live check.
 
 Live video and settings require actual devices. A passing local capture or build

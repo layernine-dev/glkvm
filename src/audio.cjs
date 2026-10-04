@@ -10,7 +10,9 @@ const { browserDeviceId } = require('./device-ids.cjs');
 /** @typedef {'disabled' | 'default' | DeviceChoice} InputChoice */
 /** @typedef {'default' | DeviceChoice} OutputChoice */
 /** @typedef {{input: InputChoice, output: OutputChoice}} AudioProfile */
-/** @typedef {{foreground: AudioProfile, background: AudioProfile}} AudioSettings */
+/** The device page's own Sound and Microphone controls when a video session starts.
+ * @typedef {{speaker: boolean, microphone: boolean}} StartupAudio */
+/** @typedef {{foreground: AudioProfile, background: AudioProfile, startup: StartupAudio}} AudioSettings */
 /** Unresolved choices are silent: input null with inputMissing, output null (never '' = system default).
  * @typedef {{inputAllowed: boolean, input: string | null, inputMissing: boolean, output: string | null}} AudioRoute */
 /** @typedef {{inputs: AudioDevice[], outputs: AudioDevice[]}} AudioDevices */
@@ -18,15 +20,18 @@ const { browserDeviceId } = require('./device-ids.cjs');
 /** @typedef {{input: 'idle' | 'live' | 'disabled' | 'missing' | 'denied' | 'error', inputDevice: string | null, openInputs: number, generation: number, output: string | null, outputState: 'pending' | 'ok' | 'missing' | 'error'}} AudioStatus */
 /** @typedef {{route: SentRoute | null, outputGeneration: number}} RouteState */
 /** @typedef {{origin: string, salt: string | null, reported: AudioDevices | null, catalog: {uid: string}[]}} Resolution */
+/** @typedef {'waiting' | 'applied' | 'unchanged' | 'unsupported' | 'unavailable' | 'denied' | 'error'} StartupState */
+/** @typedef {StartupAudio & {speakerState: StartupState, microphoneState: StartupState}} StartupStatus */
 
 const deviceIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const reservedIds = new Set(['default', 'communications']);
 const inputStates = ['idle', 'live', 'disabled', 'missing', 'denied', 'error'];
 const outputStates = ['pending', 'ok', 'missing', 'error'];
+const startupStates = ['waiting', 'applied', 'unchanged', 'unsupported', 'unavailable', 'denied', 'error'];
 
 /** @returns {AudioSettings} */
 function defaultAudio() {
-  return { foreground: { input: 'disabled', output: 'default' }, background: { input: 'disabled', output: 'default' } };
+  return { foreground: { input: 'disabled', output: 'default' }, background: { input: 'disabled', output: 'default' }, startup: { speaker: false, microphone: false } };
 }
 
 /** @param {unknown} id */
@@ -50,6 +55,15 @@ function validateChoice(value, input) {
   return { deviceId: /** @type {string} */ (choice.deviceId), label };
 }
 
+/** Older settings start with sound and microphone off; nothing is inferred from device choices.
+ * @param {unknown} value @returns {StartupAudio} */
+function validateStartup(value) {
+  if (value === undefined) return { speaker: false, microphone: false };
+  const startup = /** @type {Record<string, unknown> | null} */ (value && typeof value === 'object' ? value : null);
+  if (!startup || typeof startup.speaker !== 'boolean' || typeof startup.microphone !== 'boolean') throw new Error('Invalid startup audio settings.');
+  return { speaker: startup.speaker, microphone: startup.microphone };
+}
+
 /** Older settings have no audio profiles: keep the microphone disabled and use the system output.
  * @param {unknown} value @returns {AudioSettings} */
 function validateAudio(value) {
@@ -62,7 +76,7 @@ function validateAudio(value) {
     if (!item) throw new Error('Invalid audio settings.');
     return { input: validateChoice(item.input, true), output: /** @type {OutputChoice} */ (validateChoice(item.output, false)) };
   };
-  return { foreground: validateProfile(input.foreground), background: validateProfile(input.background) };
+  return { foreground: validateProfile(input.foreground), background: validateProfile(input.background), startup: validateStartup(input.startup) };
 }
 
 /** @param {AudioSettings} audio */
@@ -134,6 +148,13 @@ function validateAudioStatus(value) {
   return { input: status.input, inputDevice: status.inputDevice, openInputs: status.openInputs, generation: status.generation, output: status.output, outputState: status.outputState };
 }
 
+/** @param {unknown} value @returns {StartupStatus | null} */
+function validateStartupStatus(value) {
+  const status = /** @type {StartupStatus | null} */ (value && typeof value === 'object' ? value : null);
+  if (!status || typeof status.speaker !== 'boolean' || typeof status.microphone !== 'boolean' || !startupStates.includes(status.speakerState) || !startupStates.includes(status.microphoneState)) return null;
+  return { speaker: status.speaker, microphone: status.microphone, speakerState: status.speakerState, microphoneState: status.microphoneState };
+}
+
 /** Prepare the next route for a page. A changed speaker starts a new output generation,
  * so confirmations of an earlier route (including the same speaker before A → B → A)
  * cannot unmute the window.
@@ -153,4 +174,4 @@ function outputRouted(state, status) {
     && status.generation >= state.outputGeneration && status.generation <= state.route.generation;
 }
 
-module.exports = { defaultAudio, validateAudio, inputAllowed, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, nextRoute, routeChanged, outputRouted };
+module.exports = { defaultAudio, validateAudio, inputAllowed, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, validateStartupStatus, nextRoute, routeChanged, outputRouted };

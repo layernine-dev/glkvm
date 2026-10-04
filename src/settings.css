@@ -57,3 +57,4 @@ footer { border-top:1px solid var(--border); display:flex; align-items:center; j
 .audio-column { color:var(--secondary); font-size:12px; }
 .audio-label { color:var(--secondary); }
 .audio-status { grid-column:1 / -1; margin:2px 0 0; color:var(--secondary); font-size:12px; line-height:1.5; }
+.audio-startup { grid-column:1 / -1; }
