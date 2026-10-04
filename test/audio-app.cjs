@@ -1,11 +1,11 @@
 require('./runtime.cjs');
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, session } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { defaults } = require('../src/config.cjs');
+const { defaults, partitionFor } = require('../src/config.cjs');
 const fakeCatalog = require('./fake-catalog.cjs');
 const { readDeviceIdSalt } = require('../src/device-ids.cjs');
 
@@ -46,18 +46,6 @@ const vendorScript = `<script>
     return audio.play().then(() => 'playing', error => error.name);
   };
   window.sinks = () => [...document.querySelectorAll('.remote-audio')].map(audio => audio.sinkId);
-  // Test control: slow down speaker changes, as a slow audio device would, or make players reject them.
-  window.sinkDelay = 0; window.sinkFail = false; window.sinkCalls = [];
-  for (const proto of [HTMLMediaElement.prototype, Object.getPrototypeOf(AudioContext.prototype)]) {
-    const original = proto.setSinkId;
-    proto.setSinkId = function setSinkId(id) {
-      window.sinkCalls.push(id);
-      const fail = window.sinkFail && this instanceof HTMLMediaElement;
-      if (!window.sinkDelay && !fail) return original.call(this, id);
-      return new Promise(resolve => setTimeout(resolve, window.sinkDelay)).then(() => fail ? Promise.reject(new DOMException('Test speaker failure.', 'AbortError')) : original.call(this, id));
-    };
-  }
-  window.delaySinks = ms => { window.sinkDelay = ms; };
   // Test control: players the page starts at load, before its first route arrives.
   if (localStorage.getItem('fixture-early-audio')) {
     localStorage.removeItem('fixture-early-audio');
@@ -108,6 +96,8 @@ server.listen(0, '127.0.0.1', async () => {
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(config));
   fakeCatalog.setDevices(fakeCatalog.fakeDevices());
   await app.whenReady();
+  // Speaker changes that reach Chromium can be slowed down or failed (see sink-hooks.cjs).
+  for (const device of config.devices) session.fromPartition(partitionFor(device)).registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'sink-hooks.cjs') });
   require('../src/main.cjs');
   try {
     await waitFor(() => ['First', 'Second'].every(title => BrowserWindow.getAllWindows().some(win => win.getTitle() === title)));
@@ -344,9 +334,9 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok((status(first)?.generation ?? 0) > gatedGeneration);
     await run(first, 'window.delaySinks(0)');
 
-    // A start that bypasses play() (here another frame's native play after the page moved
-    // the player to the default speaker) is paused until it is routed again.
-    await run(first, `(async () => { const audio = document.createElement('audio'); window.ungated = audio; document.body.append(audio); audio.srcObject = window.toneStream(); await audio.play(); audio.pause(); await audio.setSinkId(''); })()`);
+    // A start that bypasses play() (here another frame's native play after another frame's
+    // native setSinkId moved the player to the default speaker) is paused until it is routed again.
+    await run(first, `(async () => { const audio = document.createElement('audio'); window.ungated = audio; document.body.append(audio); audio.srcObject = window.toneStream(); await audio.play(); audio.pause(); await document.querySelector('iframe').contentWindow.HTMLMediaElement.prototype.setSinkId.call(audio, ''); })()`);
     await waitFor(() => status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'audible before ungated start');
     assert.deepEqual(await run(first, `(async () => {
       const audio = window.ungated;
@@ -356,6 +346,102 @@ server.listen(0, '127.0.0.1', async () => {
       return [events.slice(0, 3), audio.paused, audio.sinkId];
     })()`), [['play:default', 'pause:default', 'play:routed'], false, speaker1.deviceId], 'Ungated start paused and resumed on the selected speaker');
     await waitFor(() => status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'routed after ungated start');
+
+    // The page may ask only for the selected speaker. Another speaker, the system default, or no
+    // output is refused before it reaches Chromium, so a playing player or running context stays
+    // on the confirmed speaker.
+    const [s1, s2] = [JSON.stringify(speaker1.deviceId), JSON.stringify(speaker2.deviceId)];
+    const pageSinks = `(async () => {
+      const audio = window.ungated, context = window.lateContext;
+      await context.resume();
+      const calls = window.sinkCalls.length;
+      const attempt = (target, id) => target.setSinkId(id).then(() => 'changed', error => error.name);
+      const results = [];
+      for (const target of [audio, context]) for (const id of ['', ${s2}, ${s1}, { type: 'none' }]) results.push(await attempt(target, id));
+      return [results, window.sinkCalls.length - calls, audio.paused, context.state, audio.sinkId, context.sinkId];
+    })()`;
+    const refused = 'NotAllowedError';
+    assert.deepEqual(await run(first, pageSinks), [[refused, refused, 'changed', refused, refused, refused, 'changed', refused], 0, false, 'running', speaker1.deviceId, speaker1.deviceId], 'Page speaker changes stay on the selected speaker');
+    assert.deepEqual([status(first)?.output, status(first)?.outputState, first.webContents.isAudioMuted()], [speaker1.deviceId, 'ok', false]);
+
+    // Competing page requests while the app's change of the playing player to the next speaker
+    // is held in Chromium: the previous speaker is refused, and the selected one joins the app's
+    // change instead of making its own.
+    const competeCalls = /** @type {number} */ (await run(first, 'window.sinkCalls.length'));
+    const competeGeneration = status(first)?.generation ?? 0;
+    await run(first, 'window.gateSinks(window.ungated)');
+    try {
+      settings.focus(); await waitFor(() => settings.isFocused());
+      await waitFor(() => (status(first)?.generation ?? 0) > competeGeneration && status(first)?.output === speaker2.deviceId, 'next speaker for competing requests');
+      await waitFor(() => run(first, 'window.heldSinks(window.ungated).length > 0'), 'app speaker change held in Chromium');
+      assert.deepEqual([await run(first, 'window.heldSinks(window.ungated)'), status(first)?.outputState, first.webContents.isAudioMuted()], [[speaker2.deviceId], 'pending', true], 'Muted while the next speaker is pending');
+      // Both requests are made while the change is held; the selected one joins it synchronously.
+      await run(first, `(() => {
+        window.compete = [${s1}, ${s2}].map(id => {
+          const entry = { result: undefined };
+          entry.promise = window.ungated.setSinkId(id).then(() => 'changed', error => error.name).then(result => (entry.result = result));
+          return entry;
+        });
+      })()`);
+      await waitFor(() => run(first, 'window.compete[0].result !== undefined'), 'previous speaker refused while the change is held');
+      assert.deepEqual(await run(first, `[window.compete.map(entry => entry.result ?? 'pending'), window.heldSinks(window.ungated), window.sinkCalls.slice(${competeCalls}).filter(call => call.target === window.ungated).map(call => call.id)]`),
+        [[refused, 'pending'], [speaker2.deviceId], [speaker2.deviceId]], 'The selected speaker waits for the held change without its own call');
+    } finally {
+      await run(first, 'window.releaseSinks()');
+    }
+    assert.deepEqual(await run(first, `(async () => {
+      const audio = window.ungated;
+      const results = await Promise.all(window.compete.map(entry => entry.promise));
+      return [results, audio.paused, audio.sinkId, window.sinkCalls.slice(${competeCalls}).filter(call => call.target === audio).map(call => call.id)];
+    })()`), [[refused, 'changed'], false, speaker2.deviceId, [speaker2.deviceId]], 'One speaker change reaches Chromium for the app and the page');
+    // App speaker changes still move playing players and running contexts.
+    await waitFor(() => status(first)?.output === speaker2.deviceId && status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'background speaker for playing targets');
+    assert.deepEqual(await run(first, '[window.ungated.paused, window.ungated.sinkId, window.lateContext.state, window.lateContext.sinkId]'), [false, speaker2.deviceId, 'running', speaker2.deviceId]);
+    assert.equal(await run(first, `window.ungated.setSinkId(${s1}).then(() => 'changed', error => error.name)`), refused, 'The previous speaker is refused after the change');
+
+    // B -> A -> B while the page's own request for B is held in Chromium: the request withdraws
+    // the confirmation, the window stays muted from then until the final speaker is confirmed,
+    // and the requested player never moves to A. Every mute change is recorded in the main
+    // process from before A until that confirmation.
+    const requestCalls = /** @type {number} */ (await run(first, 'window.sinkCalls.length'));
+    const requestGeneration = status(first)?.generation ?? 0;
+    /** @param {import('../src/audio.cjs').AudioStatus | undefined} current */
+    const finalRequestRoute = current => !!current && current.generation >= requestGeneration + 2 && current.outputState === 'ok' && current.output === speaker2.deviceId;
+    const setAudioMuted = first.webContents.setAudioMuted;
+    /** @type {boolean[]} */
+    const requestMutes = [];
+    /** @type {string[]} */
+    const requestLeaks = [];
+    try {
+      await run(first, `(() => { const audio = new Audio(); window.requested = audio; window.gateSinks(audio); window.requestedResult = audio.setSinkId(${s2}).then(() => 'changed', error => error.name); })()`);
+      await waitFor(() => status(first)?.outputState === 'pending' && first.webContents.isAudioMuted(), 'page request withdraws the confirmation');
+      await waitFor(() => run(first, 'window.heldSinks(window.requested).length > 0'), 'page request held in Chromium');
+      first.webContents.setAudioMuted = function (/** @type {boolean} */ muted) {
+        const current = status(first);
+        requestMutes.push(muted);
+        if (!muted && !finalRequestRoute(current)) requestLeaks.push(JSON.stringify(current));
+        return setAudioMuted.call(this, muted);
+      };
+      assert.equal(first.webContents.isAudioMuted(), true, 'Muted when the recording starts');
+      first.focus();
+      await waitFor(() => (status(first)?.generation ?? 0) > requestGeneration && status(first)?.output === speaker1.deviceId, 'route A while the page request is held');
+      settings.focus(); await waitFor(() => settings.isFocused());
+      await waitFor(() => (status(first)?.generation ?? 0) >= requestGeneration + 2 && status(first)?.output === speaker2.deviceId, 'final route B while the page request is held');
+      assert.deepEqual([await run(first, 'window.heldSinks(window.requested)'), status(first)?.outputState, first.webContents.isAudioMuted()], [[speaker2.deviceId], 'pending', true], 'The page request is still held after B -> A -> B');
+      assert.equal(await run(first, 'window.releaseSinks()'), 1);
+      await waitFor(() => finalRequestRoute(status(first)) && !first.webContents.isAudioMuted(), `final speaker confirmed after the page request (start ${requestGeneration}, status ${JSON.stringify(status(first))})`);
+    } finally {
+      first.webContents.setAudioMuted = setAudioMuted;
+      await run(first, 'window.releaseSinks()');
+    }
+    assert.deepEqual(requestLeaks, [], 'Muted until the final speaker is confirmed after the page request');
+    assert.equal(requestMutes.at(-1), false, `The confirming unmute was recorded: ${JSON.stringify(requestMutes)}`);
+    const [requestResult, requestSink, requestIds] = /** @type {[string, string, string[]]} */ (await run(first, `(async () => [await window.requestedResult, window.requested.sinkId, window.sinkCalls.slice(${requestCalls}).filter(call => call.target === window.requested).map(call => call.id)])()`));
+    assert.deepEqual([requestResult, requestSink], ['changed', speaker2.deviceId], 'The page request completes on the selected speaker');
+    assert.ok(requestIds.length > 0 && requestIds.every(id => id === speaker2.deviceId), `The requested player never moved to the replaced speaker: ${JSON.stringify(requestIds)}`);
+    first.focus(); await waitFor(() => first.isFocused());
+    await waitFor(() => status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok' && !first.webContents.isAudioMuted(), 'foreground speaker for playing targets');
+    assert.deepEqual(await run(first, '[window.ungated.sinkId, window.lateContext.sinkId, window.requested.sinkId]'), [speaker1.deviceId, speaker1.deviceId, speaker1.deviceId]);
 
     // Clones and native stops: the capture lasts while any derived track is live.
     first.focus(); await waitFor(() => first.isFocused());
