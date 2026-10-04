@@ -1,5 +1,5 @@
 require('./runtime.cjs');
-const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, safeStorage, globalShortcut, screen, clipboard, powerMonitor } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -47,11 +47,15 @@ app.on('did-resign-active', () => { appActive = false; logFocus('app did-resign-
 app.on('activate', () => logFocus('app activate'));
 app.on('browser-window-focus', (_event, win) => logFocus('window focus', win));
 app.on('browser-window-blur', (_event, win) => logFocus('window blur', win));
+void app.whenReady().then(() => {
+  powerMonitor.on('lock-screen', () => logFocus('screen locked'));
+  powerMonitor.on('unlock-screen', () => logFocus('screen unlocked'));
+});
 function focusDiagnostics() {
   try {
     const focused = BrowserWindow.getFocusedWindow();
     return JSON.stringify({
-      appActive, appHidden: process.platform === 'darwin' ? app.isHidden() : null,
+      appActive, appHidden: process.platform === 'darwin' ? app.isHidden() : null, systemIdleState: powerMonitor.getSystemIdleState(1),
       focusedWindow: focused ? { id: focused.id, title: focused.getTitle() } : null,
       windows: BrowserWindow.getAllWindows().map(win => ({ id: win.id, title: win.getTitle(), visible: win.isVisible(), minimized: win.isMinimized(), focusable: win.isFocusable(), focused: win.isFocused() })),
       menu: Menu.getApplicationMenu()?.items.map(item => ({ label: item.label, items: (item.submenu?.items || []).slice(0, 40).map(child => child.label) })) ?? null,
