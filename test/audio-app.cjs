@@ -163,11 +163,25 @@ server.listen(0, '127.0.0.1', async () => {
     assert.deepEqual(await run(first, 'window.sinks()'), [speaker2.deviceId, speaker2.deviceId], 'New elements start on the current speaker');
     await run(first, 'window.setMicEnabled(true)');
 
-    // Rapid transitions settle on the final state.
+    // Rapid transitions settle on the final state. macOS can apply queued key-window changes
+    // after isFocused() first reports true, so the route must match the focus once it is stable.
     for (let i = 0; i < 8; i++) { first.focus(); settings.focus(); }
     first.focus();
-    await waitFor(() => first.isFocused());
-    await waitFor(() => status(first)?.inputDevice === mic1.deviceId && status(first)?.output === speaker1.deviceId, 'rapid transitions');
+    let focusedTitle = '', stableChecks = 0;
+    await waitFor(() => {
+      const title = BrowserWindow.getFocusedWindow()?.getTitle() || '';
+      stableChecks = title && title === focusedTitle ? stableChecks + 1 : 0;
+      focusedTitle = title;
+      return stableChecks >= 10;
+    }, 'stable focus after rapid transitions');
+    const settledForeground = first.isFocused();
+    const [settledMic, settledSpeaker] = settledForeground ? [mic1, speaker1] : [mic2, speaker2];
+    await waitFor(() => status(first)?.inputDevice === settledMic.deviceId && status(first)?.output === settledSpeaker.deviceId && status(first)?.outputState === 'ok', 'rapid transitions');
+    assert.deepEqual(await run(first, 'window.sinks()'), [settledSpeaker.deviceId, settledSpeaker.deviceId]);
+    if (!settledForeground) {
+      first.focus(); await waitFor(() => first.isFocused());
+      await waitFor(() => status(first)?.inputDevice === mic1.deviceId && status(first)?.output === speaker1.deviceId && status(first)?.outputState === 'ok', 'foreground after rapid transitions');
+    }
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(status(first)?.inputDevice, mic1.deviceId);
     assert.deepEqual(await run(first, 'window.sinks()'), [speaker1.deviceId, speaker1.deviceId]);
@@ -450,6 +464,7 @@ server.listen(0, '127.0.0.1', async () => {
     app.exit(0);
   } catch (error) {
     console.error(error); console.error('Statuses:', JSON.stringify([...statuses]));
+    console.error('Focused window:', JSON.stringify(BrowserWindow.getFocusedWindow()?.getTitle() ?? null));
     app.exit(1);
   }
   finally { server.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); }
