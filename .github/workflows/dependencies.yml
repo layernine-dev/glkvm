@@ -1,0 +1,32 @@
+name: Dependency upgrades
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: dependency-upgrades
+  cancel-in-progress: false
+  queue: max
+jobs:
+  upgrade:
+    if: github.repository == 'layernine-dev/glkvm'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Resolve eligible stable releases through Bun's 24-hour age gate
+        run: |
+          bun install --frozen-lockfile
+          bun run deps:update
+      - name: Open or refresh dependency PR and dispatch its macOS checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/dependency-pr.cjs

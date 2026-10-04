@@ -14,7 +14,7 @@ app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-startup-audio-'));
 app.setPath('userData', directory);
 
-// Mirrors the firmware's Pinia stores (see /tmp/glkvm-startup-audio/evidence.md): kvm.configState.volumeOn
+// Mirrors the firmware's Pinia stores (provenance: docs/provenance.md): kvm.configState.volumeOn
 // and setVolumeOn, audioMic.state.micMuted and setMicMuted, usbManagement.enableMic and initLoading.
 // Unmuting starts the microphone like the firmware's audio session; a failure shows the firmware's
 // microphone error dialog and re-mutes it, and a capture that resolves after a mute is stale and stopped.

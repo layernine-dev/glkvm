@@ -1,27 +1,67 @@
-name: Neo macOS tests
+name: CI
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: neo-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: glkvm-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
 jobs:
   test:
+    name: macOS checks
+    if: github.repository == 'layernine-dev/glkvm'
     runs-on: [self-hosted, macOS, ARM64, neo]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Run tests in the shared Neo slot
         shell: zsh "{0}"
         run: |
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export CMAKE_BUILD_PARALLEL_LEVEL=2
           caffeinate -d -i -u python3 "$HOME/dev/my/macos/scripts/neo-test-lock.py" /bin/zsh -e -c '
             eval "$(fnm env --shell zsh)"
             bun install --frozen-lockfile
             bun run check
             bun run test
             bun run test:gui
+          '
+  release:
+    name: Publish release
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, ARM64, neo]
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build, notarize and publish the tested commit
+        shell: zsh "{0}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GLKVM_RELEASE_SIGNING_IDENTITY: ${{ vars.GLKVM_RELEASE_SIGNING_IDENTITY }}
+          GLKVM_NOTARY_PROFILE: ${{ vars.GLKVM_NOTARY_PROFILE }}
+        run: |
+          export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+          export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export CMAKE_BUILD_PARALLEL_LEVEL=2
+          caffeinate -d -i -u python3 "$HOME/dev/my/macos/scripts/neo-test-lock.py" /bin/zsh -e -c '
+            eval "$(fnm env --shell zsh)"
+            bun install --frozen-lockfile
+            release_status=0
+            node scripts/release.cjs published || release_status=$?
+            if [ "$release_status" -eq 0 ]; then exit 0; fi
+            if [ "$release_status" -ne 2 ]; then exit "$release_status"; fi
+            bun run build:release
+            bun run release:publish
           '

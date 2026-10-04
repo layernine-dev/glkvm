@@ -291,6 +291,14 @@ function crashingCatalog(dir, name, lines) {
   return { executable, launches: () => fs.existsSync(launches) ? fs.readFileSync(launches, 'utf8').split('\n').filter(Boolean).length : 0 };
 }
 const wait = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
+/** Wait for an observed child launch instead of assuming macOS starts it in 400 ms.
+ * @param {() => number} launches @param {number} count */
+async function waitForLaunch(launches, count) {
+  const deadline = Date.now() + 10000;
+  while (launches() < count && Date.now() < deadline) await wait(10);
+  assert.equal(launches(), count, 'Expected catalog launch before its next restart');
+  await wait(50); // Let the short-lived fixture exit and schedule its restart.
+}
 
 test('a crashing catalog restarts three times per start, even after it reported snapshots', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-catalog-'));
@@ -320,13 +328,14 @@ test('a crashing catalog restarts three times per start, even after it reported 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('stopping a crashed catalog during its restart delay cancels the restart, even with an immediate new start; a new start retries again', async () => {
+test('stopping a crashed catalog during its restart delay cancels the restart, even with an immediate new start; a new start retries again', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-catalog-'));
   try {
     const catalog = crashingCatalog(dir, 'catalog', [JSON.stringify({ devices: [] })]);
     const watcher = watchCatalog(catalog.executable, () => {});
+    t.after(() => watcher.stop());
     watcher.start();
-    await wait(400);
+    await waitForLaunch(catalog.launches, 1);
     assert.equal(catalog.launches(), 1);
     watcher.stop();
     await wait(1500);
@@ -338,7 +347,7 @@ test('stopping a crashed catalog during its restart delay cancels the restart, e
     // Stopping and starting again at once, before the old restart delay ends: the old
     // restart never fires into the new start, which still launches exactly four times.
     watcher.start();
-    await wait(400);
+    await waitForLaunch(catalog.launches, 6);
     assert.equal(catalog.launches(), 6);
     watcher.stop();
     watcher.start();

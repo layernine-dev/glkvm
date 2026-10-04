@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard, systemPreferences } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard, systemPreferences, autoUpdater, shell } = require('electron');
 if (process.platform === 'darwin' && !app.isPackaged) {
   console.error('Use bun start to run the signed GLKVM app. Generic Electron cannot access app credentials.');
   app.exit(1);
@@ -16,6 +16,9 @@ const { watchCatalog, catalogPath, deviceLabels } = require('./audio-catalog.cjs
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./device-ids.cjs');
 
 const { keyboardAction, matchesBinding } = require('./keyboard.cjs');
+const { setupUpdates } = require('./updates.cjs');
+/** @type {ReturnType<typeof setupUpdates>} */
+let updates = null;
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
 /** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
@@ -455,7 +458,7 @@ function installMenu() {
   const viewer = entry && windows.get(entry.device.id) === entry;
   const clean = viewer && !entry.options;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: app.name, submenu: [{ role: 'about' }, { label: 'Check for Updates…', enabled: !!updates, click: () => updates?.check() }, { label: 'Open Source Licenses…', click: () => { void shell.openPath(path.join(process.resourcesPath, 'licenses')); } }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: entry ? `Device — ${entry.device.name}` : 'Device', submenu: [
       ...config.devices.map((device, i) => ({ label: `Open ${device.name}`, ...(i < 9 ? { accelerator: `CmdOrCtrl+${i + 1}` } : {}), click: () => showDevice(device) })),
       { label: 'Manage Connections…', click: showSettings }, { type: 'separator' },
@@ -702,6 +705,7 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
 app.on('will-quit', () => { catalogWatcher.stop(); if (app.isReady()) globalShortcut.unregisterAll(); });
+app.on('before-quit', () => { for (const entry of allEntries()) releaseInput(entry); });
 
 app.on('certificate-error', (event, contents, url, error, certificate, callback) => {
   const entry = allEntries().find(({ window, device }) => window.webContents === contents && isDeviceURL(url, device));
@@ -750,6 +754,7 @@ else {
       await dialog.showMessageBox({ type: 'error', message: 'Could not read saved settings', detail: `${error instanceof Error ? error.message : String(error)}\n\nThe original file has been preserved at ${configPath}. The default connections will be shown until you save settings again.` });
     }
     screen.on('display-metrics-changed', installMenu);
+    updates = setupUpdates({ app, autoUpdater, dialog, manifest: require('../package.json'), releaseInput: () => { for (const entry of allEntries()) releaseInput(entry); } });
     installMenu(); openStartupDevices();
     app.on('activate', () => { if (!windows.size && !settingsWindow && !consoles.size) openStartupDevices(); });
   });
