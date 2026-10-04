@@ -46,6 +46,8 @@ function watchCatalog(executable, onChange) {
   /** @type {import('node:child_process').ChildProcess | null} */
   let child = null;
   let restarts = 0;
+  /** @type {NodeJS.Timeout | null} */
+  let restartTimer = null;
   const start = () => {
     const current = spawn(executable, ['--watch'], { stdio: ['pipe', 'pipe', 'ignore'] });
     child = current;
@@ -57,21 +59,27 @@ function watchCatalog(executable, onChange) {
       for (let index = buffer.indexOf('\n'); index >= 0; index = buffer.indexOf('\n')) {
         const devices = parseCatalog(buffer.slice(0, index));
         buffer = buffer.slice(index + 1);
-        if (devices) { restarts = 0; onChange(devices); }
+        if (devices) onChange(devices);
       }
     });
     current.on('error', () => {});
     current.on('exit', () => {
       if (child !== current) return;
       child = null;
-      // A crashed catalog restarts a few times; until then the last list stays.
-      if (restarts++ < 3) setTimeout(() => { if (!child && running) start(); }, 1000);
+      // A crashed catalog restarts a few times per start(), even after it reported
+      // snapshots (it reports one at launch); afterwards the last list stays.
+      if (restarts++ < 3) restartTimer = setTimeout(() => { restartTimer = null; if (!child && running) start(); }, 1000);
     });
   };
   let running = false;
   return {
     start() { if (running) return; running = true; restarts = 0; if (!child) start(); },
-    stop() { running = false; const current = child; child = null; current?.stdin?.end(); current?.kill(); },
+    stop() {
+      running = false;
+      // A pending restart belongs to this start(); a quick stop() and start() must not inherit it.
+      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+      const current = child; child = null; current?.stdin?.end(); current?.kill();
+    },
   };
 }
 

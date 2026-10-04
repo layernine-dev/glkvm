@@ -4,7 +4,7 @@ const { defaults, validateConfig } = require('../src/config.cjs');
 const { prepareConfig } = require('../src/credentials.cjs');
 const { defaultAudio, validateAudio, resolveDevice, routeFor, mediaPermission, validateDeviceReport, validateAudioStatus, validateStartupStatus, nextRoute, routeChanged, outputRouted } = require('../src/audio.cjs');
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('../src/device-ids.cjs');
-const { parseCatalog, deviceLabels } = require('../src/audio-catalog.cjs');
+const { parseCatalog, deviceLabels, watchCatalog } = require('../src/audio-catalog.cjs');
 const { createHmac } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -280,4 +280,70 @@ test('startup status reports from the page are validated', () => {
   assert.deepEqual(validateStartupStatus({ ...ok, extra: 'x' }), ok);
   for (const state of ['waiting', 'applied', 'unchanged', 'unsupported', 'unavailable', 'denied', 'error']) assert.ok(validateStartupStatus({ ...ok, microphoneState: state }));
   for (const bad of [null, 'applied', { ...ok, speaker: 'true' }, { ...ok, speakerState: 'on' }, { ...ok, microphoneState: undefined }, { ...ok, microphone: 1 }]) assert.equal(validateStartupStatus(bad), null);
+});
+
+/** A catalog that records each launch, prints its snapshot lines and then crashes.
+ * @param {string} dir @param {string} name @param {string[]} lines */
+function crashingCatalog(dir, name, lines) {
+  const executable = path.join(dir, name);
+  const launches = path.join(dir, `${name}.launches`);
+  fs.writeFileSync(executable, `#!/bin/sh\necho x >> '${launches}'\n${lines.map(line => `printf '%s\\n' '${line}'`).join('\n')}\nexit 1\n`, { mode: 0o755 });
+  return { executable, launches: () => fs.existsSync(launches) ? fs.readFileSync(launches, 'utf8').split('\n').filter(Boolean).length : 0 };
+}
+const wait = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a crashing catalog restarts three times per start, even after it reported snapshots', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-catalog-'));
+  try {
+    const populated = JSON.stringify({ devices: [{ uid: 'mic', name: 'Mic', input: true, output: false, alive: true }] });
+    const empty = JSON.stringify({ devices: [] });
+    const cases = [
+      { name: 'populated', lines: [populated] },
+      { name: 'empty', lines: [empty] },
+      { name: 'multiple', lines: [empty, populated, populated] },
+      { name: 'silent', lines: [] },
+    ].map(({ name, lines }) => {
+      const catalog = crashingCatalog(dir, name, lines);
+      /** @type {import('../src/audio-catalog.cjs').NativeDevice[][]} */
+      const snapshots = [];
+      const watcher = watchCatalog(catalog.executable, devices => snapshots.push(devices));
+      watcher.start();
+      return { name, lines, catalog, snapshots, watcher };
+    });
+    // The initial launch and three restarts, one second apart; then the watcher gives up.
+    await wait(5500);
+    for (const { name, lines, catalog, snapshots, watcher } of cases) {
+      watcher.stop();
+      assert.equal(catalog.launches(), 4, `${name}: initial launch and three restarts, never a loop`);
+      assert.equal(snapshots.length, 4 * lines.length, `${name}: every snapshot is still reported`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('stopping a crashed catalog during its restart delay cancels the restart, even with an immediate new start; a new start retries again', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-catalog-'));
+  try {
+    const catalog = crashingCatalog(dir, 'catalog', [JSON.stringify({ devices: [] })]);
+    const watcher = watchCatalog(catalog.executable, () => {});
+    watcher.start();
+    await wait(400);
+    assert.equal(catalog.launches(), 1);
+    watcher.stop();
+    await wait(1500);
+    assert.equal(catalog.launches(), 1, 'No restart after stop');
+    watcher.start();
+    await wait(4500);
+    watcher.stop();
+    assert.equal(catalog.launches(), 5, 'A new start launches once and restarts three times');
+    // Stopping and starting again at once, before the old restart delay ends: the old
+    // restart never fires into the new start, which still launches exactly four times.
+    watcher.start();
+    await wait(400);
+    assert.equal(catalog.launches(), 6);
+    watcher.stop();
+    watcher.start();
+    await wait(4500);
+    watcher.stop();
+    assert.equal(catalog.launches(), 10, 'The new start launches once and restarts three times, without the old restart');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

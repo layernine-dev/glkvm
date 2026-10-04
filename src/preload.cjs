@@ -489,11 +489,14 @@ function installAudioRouting(bridge) {
   const gatedPlay = function play() {
     const target = /** @type {Sink} */ (/** @type {unknown} */ (this));
     register(this);
-    if (routed(target)) return nativePlay.call(this);
+    // A player without audio starts at once, even before the first route.
+    if (route ? routed(target) : silent(target)) return nativePlay.call(this);
     // Start only on the selected speaker, following route changes while waiting; never on the system default.
     const token = {};
     pendingPlays.set(this, token);
     return (async () => {
+      await firstRoute;
+      if (pendingPlays.get(this) !== token) throw new DOMException('The play() request was interrupted by a call to pause().', 'AbortError');
       try { while (!routed(target)) await applySink(target); } catch {
         if (pendingPlays.get(this) === token) pendingPlays.delete(this);
         throw new DOMException('The selected speaker could not be used.', 'NotAllowedError');
