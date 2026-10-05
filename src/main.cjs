@@ -408,7 +408,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   });
   win.webContents.on('did-finish-load', () => {
     // Authentication is complete even when there is no HDMI signal to decode.
-    if (!consoleWindow && !entry.needsLogin && entry.loginStatus === 'Connecting to video…') {
+    if (!consoleWindow && !entry.needsLogin && entry.loginStatus) {
       if (entry.loginTimer) clearTimeout(entry.loginTimer);
       entry.loginTimer = null;
       entry.loginStatus = '';
@@ -557,6 +557,7 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
     const next = writeConfig(configPath, await prepareConfig(value, previous, safeStorage));
     config = next;
     for (const entry of allEntries()) {
+      if (entry.window.isDestroyed()) continue;
       const updated = next.devices.find(device => device.id === entry.device.id);
       if (!updated || updated.origin !== entry.device.origin) {
         releaseInput(entry); entry.window.close();
@@ -564,6 +565,13 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
         const passwordChanged = entry.device.encryptedPassword !== updated.encryptedPassword;
         entry.device = updated;
         const clean = windows.get(updated.id) === entry;
+        if (clean && passwordChanged && !updated.encryptedPassword) {
+          if (entry.loginTimer) clearTimeout(entry.loginTimer);
+          entry.loginTimer = null;
+          entry.loginStatus = '';
+          const helper = consoles.get(updated.id);
+          if (helper?.background) helper.window.close();
+        }
         entry.window.setTitle(clean ? updated.name : `${updated.name} — Device Settings`);
         if (clean && previous.controlEnabled !== next.controlEnabled) { releaseInput(entry); entry.controlEnabled = next.controlEnabled; entry.moving = false; sendMode(entry); }
         sendMode(entry);
