@@ -49,6 +49,10 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   };
   ipcRenderer.on('glkvm:check-auth', () => { reported = false; check(); });
+  // React immediately to form mounting and successful router transitions.
+  new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('storage', check);
+  window.addEventListener('hashchange', check);
   setInterval(check, 500);
   check();
 }, { once: true });
