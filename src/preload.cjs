@@ -30,6 +30,7 @@ let titleLabel;
 let releasing = false;
 let lastStreaming = false;
 let loginReported = false;
+let loginStatus = '';
 const pressedKeys = new Map();
 const pressedButtons = new Set();
 /** @type {import('./keyboard.cjs').KeyboardSettings | undefined} */
@@ -165,6 +166,7 @@ ipcRenderer.on('glkvm:release-input', releaseInput);
 ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
   keyboard = mode?.keyboard;
+  loginStatus = typeof mode?.loginStatus === 'string' ? mode.loginStatus : '';
   controlEnabled = mode?.controlEnabled === true;
   moving = mode?.moving === true;
   if (options !== (mode?.options === true)) lastChrome = '';
@@ -265,7 +267,13 @@ function update() {
     lastStreaming = streaming;
     ipcRenderer.send('glkvm:stream-state', streaming);
   }
+  const authenticating = !ready && !!loginStatus;
+  root.toggleAttribute('data-glkvm-authenticating', authenticating);
+  status.setAttribute('role', 'status');
+  status.textContent = authenticating ? loginStatus : signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
+  status.classList.toggle('busy', authenticating && !loginStatus.startsWith('Sign-in did not'));
   if (options) {
+    status.hidden = !authenticating;
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);
     const frame = document.querySelector('#stream-window');
     if (ready && frame) {
@@ -279,7 +287,6 @@ function update() {
     return;
   }
   root.setAttribute('data-glkvm-clean', '');
-  status.textContent = signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
   root.toggleAttribute('data-glkvm-control', controlEnabled && !moving && ready);
   root.toggleAttribute('data-glkvm-drag', !controlEnabled || moving);
   root.toggleAttribute('data-glkvm-waiting', !ready);
@@ -386,6 +393,20 @@ window.addEventListener('DOMContentLoaded', () => {
       display: block; position: fixed; inset: 6px; z-index: 2147483647;
       -webkit-app-region: drag;
     }
+    html[data-glkvm-authenticating] #glkvm-clean-surface {
+      display: flex; position: fixed; inset: 0; z-index: 2147483646;
+      align-items: center; justify-content: center; visibility: visible !important;
+      background: #111; pointer-events: auto;
+    }
+    html[data-glkvm-authenticating] #glkvm-clean-status { visibility: visible !important; }
+    #glkvm-clean-status { max-width: 460px; padding: 24px; text-align: center; }
+    #glkvm-clean-status.busy::before {
+      content: ''; display: block; width: 20px; height: 20px; margin: 0 auto 16px;
+      border: 2px solid #444; border-top-color: #bbb; border-radius: 50%;
+      animation: glkvm-signing-in 1s linear infinite;
+    }
+    @keyframes glkvm-signing-in { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #glkvm-clean-status.busy::before { animation: none; } }
     #glkvm-clean-status { color: #a3a3a3; font: 14px system-ui; }
     #glkvm-clean-status[hidden] { display: none; }
   `;

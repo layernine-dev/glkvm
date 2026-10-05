@@ -92,6 +92,8 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(login);
     await waitFor(() => !login.webContents.isLoading());
     assert.equal(login.isVisible(), false);
+    await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
+    assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);
     assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
 
     await waitFor(() => login.webContents.executeJavaScript("document.querySelector('#password')?.value === 'incorrect-fixture-secret'"));
@@ -136,6 +138,7 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-control')"));
     await waitFor(() => login.isDestroyed());
     assert.equal(helperAuthenticated, true, 'Sign-in completes without a decoded video in the hidden helper');
+    assert.equal(await clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-authenticating')"), false, 'The sign-in overlay clears when live video arrives');
     assert.equal(pageLoads, loadsBeforeSuccessfulLogin + 2, 'Saving the password reloads the helper and successful sign-in reloads the visible window once');
     assert.equal(await clean.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts')"), '2');
     assert.equal(new URL(clean.webContents.getURL()).hash, '');
