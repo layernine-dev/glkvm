@@ -404,6 +404,13 @@ function showDevice(device, consoleWindow = false, background = false) {
     const remoteEdit = !consoleWindow && !entry.options && entry.streaming && entry.controlEnabled && !entry.moving && input.meta && !input.alt && ['a', 'c', 'v', 'x', 'z'].includes(input.key.toLowerCase()) && !(input.shift && input.key.toLowerCase() === 'c');
     win.webContents.setIgnoreMenuShortcuts(localAction || remoteEdit);
   });
+  win.webContents.on('did-finish-load', () => {
+    // Authentication is complete even when there is no HDMI signal to decode.
+    if (!consoleWindow && !entry.needsLogin && entry.loginStatus === 'Connecting to video…') {
+      entry.loginStatus = '';
+      sendMode(entry);
+    }
+  });
   win.once('ready-to-show', () => { if (!entry.background) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
@@ -560,7 +567,10 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
     for (const entry of windows.values()) {
       entry.audio.saltAttempts = 0;
       sendStartup(entry);
-      if (entry.needsLogin && entry.device.encryptedPassword) showDevice(entry.device, true, true);
+      if (entry.needsLogin && entry.device.encryptedPassword) {
+        if (!consoles.has(entry.device.id)) beginLogin(entry);
+        showDevice(entry.device, true, true);
+      }
     }
     migrateLegacyChoices();
     installMenu();
