@@ -270,8 +270,9 @@ function update() {
   const authenticating = !options && !ready && !!loginStatus;
   root.toggleAttribute('data-glkvm-authenticating', authenticating);
   status.setAttribute('role', 'status');
-  status.textContent = authenticating ? loginStatus : signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
-  status.classList.toggle('busy', authenticating && !loginStatus.startsWith('Sign-in did not'));
+  const statusText = authenticating ? loginStatus : signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
+  if (status.textContent !== statusText) status.textContent = statusText;
+  status.classList.toggle('busy', authenticating && ['Signing in…', 'Connecting to video…'].includes(loginStatus));
   if (options) {
     status.hidden = !authenticating;
     for (const attribute of ['data-glkvm-clean', 'data-glkvm-control', 'data-glkvm-drag', 'data-glkvm-waiting']) root.removeAttribute(attribute);

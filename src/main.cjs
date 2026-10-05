@@ -51,15 +51,17 @@ function currentDevice() { return focusedEntry()?.device || config.devices.find(
 function sendMode(entry) {
   entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
 }
-/** @param {Entry} entry */
-function beginLogin(entry) {
+/** @param {Entry} entry @param {string} [status] */
+function beginLogin(entry, status = 'Signing in…') {
   if (entry.loginTimer) clearTimeout(entry.loginTimer);
-  entry.loginStatus = 'Signing in…';
+  entry.loginStatus = status;
   // Start before loading the helper: unreachable devices never install a preload.
   entry.loginTimer = setTimeout(() => {
     entry.loginTimer = null;
-    if (entry.window.isDestroyed() || !entry.needsLogin) return;
-    entry.loginStatus = 'Sign-in did not complete. Check your password or connection, or continue in Device Settings (⌘⇧O).';
+    if (entry.window.isDestroyed() || !entry.loginStatus) return;
+    entry.loginStatus = entry.needsLogin
+      ? 'Sign-in did not complete. Check your password or connection, or continue in Device Settings (⌘⇧O).'
+      : 'Connection did not complete. Check the device and network connection. Use Device → Reload to retry.';
     sendMode(entry);
   }, 20000);
   sendMode(entry);
@@ -407,6 +409,8 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.on('did-finish-load', () => {
     // Authentication is complete even when there is no HDMI signal to decode.
     if (!consoleWindow && !entry.needsLogin && entry.loginStatus === 'Connecting to video…') {
+      if (entry.loginTimer) clearTimeout(entry.loginTimer);
+      entry.loginTimer = null;
       entry.loginStatus = '';
       sendMode(entry);
     }
@@ -414,6 +418,12 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.once('ready-to-show', () => { if (!entry.background) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
+    if (!consoleWindow && entry.loginStatus === 'Connecting to video…') {
+      if (entry.loginTimer) clearTimeout(entry.loginTimer);
+      entry.loginTimer = null;
+      entry.loginStatus = 'Could not connect to the device. Check the network connection. Use Device → Reload to retry.';
+      sendMode(entry);
+    }
     if (entry.background) return;
     win.show();
     if (code <= -200 && code >= -299) return;
@@ -665,7 +675,11 @@ ipcMain.on('glkvm:console-authenticated', event => {
   const consoleEntry = deviceSender(event);
   if (!consoleEntry || consoles.get(consoleEntry.device.id) !== consoleEntry) return;
   const clean = windows.get(consoleEntry.device.id);
-  if (clean?.needsLogin) { if (clean.loginTimer) clearTimeout(clean.loginTimer); clean.loginTimer = null; clean.loginStatus = 'Connecting to video…'; clean.needsLogin = false; void clean.window.loadURL(`${clean.device.origin}/`).catch(() => {}); }
+  if (clean?.needsLogin) {
+    clean.needsLogin = false;
+    beginLogin(clean, 'Connecting to video…');
+    void clean.window.loadURL(`${clean.device.origin}/`).catch(() => {});
+  }
   if (consoleEntry.background) consoleEntry.window.close();
 });
 ipcMain.on('glkvm:keyboard-shortcut', (event, /** @type {unknown} */ action) => {
