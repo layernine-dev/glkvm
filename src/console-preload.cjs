@@ -4,17 +4,6 @@ const { ipcRenderer } = require('electron');
 window.addEventListener('DOMContentLoaded', () => {
   let reported = false;
   let attempted = false;
-  // Bound silent attempts, including Keychain delays and second-factor prompts.
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let deadline;
-  const armDeadline = () => {
-    clearTimeout(deadline);
-    deadline = setTimeout(() => {
-      if (!reported) ipcRenderer.send('glkvm:login-stalled');
-    }, 20000);
-  };
-  armDeadline();
-  window.addEventListener('pagehide', () => clearTimeout(deadline), { once: true });
   const sessionToken = () => {
     try {
       const token = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}').glkvm;
@@ -45,7 +34,6 @@ window.addEventListener('DOMContentLoaded', () => {
     const token = sessionToken();
     if (!reported && token && token !== initialToken) {
       reported = true;
-      clearTimeout(deadline);
       ipcRenderer.send('glkvm:console-authenticated');
       return;
     }
@@ -57,11 +45,10 @@ window.addEventListener('DOMContentLoaded', () => {
     const consoleRoute = ['', '#/', '#/kvm'].includes(location.hash.split('?')[0]);
     if (!reported && consoleRoute && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
       reported = true;
-      clearTimeout(deadline);
       ipcRenderer.send('glkvm:console-authenticated');
     }
   };
-  ipcRenderer.on('glkvm:check-auth', () => { reported = false; armDeadline(); check(); });
+  ipcRenderer.on('glkvm:check-auth', () => { reported = false; check(); });
   // React immediately to form mounting and successful router transitions.
   new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('storage', check);
