@@ -5,9 +5,15 @@ window.addEventListener('DOMContentLoaded', () => {
   let reported = false;
   let attempted = false;
   // Bound silent attempts, including Keychain delays and second-factor prompts.
-  const deadline = setTimeout(() => {
-    if (!reported) ipcRenderer.send('glkvm:login-stalled');
-  }, 20000);
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let deadline;
+  const armDeadline = () => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      if (!reported) ipcRenderer.send('glkvm:login-stalled');
+    }, 20000);
+  };
+  armDeadline();
   window.addEventListener('pagehide', () => clearTimeout(deadline), { once: true });
   const sessionToken = () => {
     try {
@@ -55,7 +61,7 @@ window.addEventListener('DOMContentLoaded', () => {
       ipcRenderer.send('glkvm:console-authenticated');
     }
   };
-  ipcRenderer.on('glkvm:check-auth', () => { reported = false; check(); });
+  ipcRenderer.on('glkvm:check-auth', () => { reported = false; armDeadline(); check(); });
   // React immediately to form mounting and successful router transitions.
   new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('storage', check);

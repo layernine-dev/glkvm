@@ -95,6 +95,13 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
     assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);
     assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
+    command('Device Settings…');
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
+    assert.equal(await clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-authenticating')"), false, 'Manual sign-in controls must remain accessible');
+    assert.equal(await clean.webContents.executeJavaScript("getComputedStyle(document.querySelector('#glkvm-clean-surface')).display"), 'none');
+    command('Device Settings…');
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-authenticating')"));
+
 
     await waitFor(() => login.webContents.executeJavaScript("document.querySelector('#password')?.value === 'incorrect-fixture-secret'"));
     await waitFor(() => login.webContents.executeJavaScript("localStorage.getItem('fixture-login-attempts') === '1'"));

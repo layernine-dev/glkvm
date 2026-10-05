@@ -267,7 +267,7 @@ function update() {
     lastStreaming = streaming;
     ipcRenderer.send('glkvm:stream-state', streaming);
   }
-  const authenticating = !ready && !!loginStatus;
+  const authenticating = !options && !ready && !!loginStatus;
   root.toggleAttribute('data-glkvm-authenticating', authenticating);
   status.setAttribute('role', 'status');
   status.textContent = authenticating ? loginStatus : signingIn ? 'Sign in in the Device Settings window (⌘⇧O).' : 'Waiting for live video…';
