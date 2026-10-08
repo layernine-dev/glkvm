@@ -262,6 +262,7 @@ function update() {
   }
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
+  else pageReported = false;
   if (!pageReported && !signingIn && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
     pageReported = true;
     ipcRenderer.send('glkvm:viewer-page-ready');

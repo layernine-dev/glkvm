@@ -82,11 +82,19 @@ function revealDevice(entry) {
   entry.loginTimer = null;
   entry.loginStatus = '';
   entry.manualLogin = false;
-  const active = entry.revealActive || entry.cover?.window.isFocused();
+  const focused = BrowserWindow.getFocusedWindow();
+  const active = entry.cover?.window.isFocused() || (entry.revealActive && (!focused || focused === entry.window));
   dismissCover(entry);
   sendMode(entry);
   if (!entry.background && !entry.window.isVisible()) {
-    if (active) entry.window.show(); else entry.window.showInactive();
+    if (active) entry.window.show();
+    else {
+      // Frameless macOS windows can activate asynchronously even with showInactive.
+      entry.window.setFocusable(false);
+      entry.window.showInactive();
+      setImmediate(() => { if (!entry.window.isDestroyed()) entry.window.setFocusable(true); });
+      if (focused && !focused.isDestroyed()) focused.focus();
+    }
   }
 }
 /** @param {Entry} entry @param {string} [status] */

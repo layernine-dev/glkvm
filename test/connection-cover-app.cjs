@@ -73,6 +73,20 @@ server.listen(0, '127.0.0.1', async () => {
     reloading.webContents.reload();
     await waitFor(() => !reloading.isVisible() && coverFor(reloading));
     await waitFor(() => reloading.isVisible() && !coverFor(reloading));
+    // A returning SPA login must report authenticated readiness again without HDMI video.
+    const returning = viewers.find(window => window.getTitle() === 'options');
+    assert.ok(returning);
+    let loginReported = false;
+    let readyReported = false;
+    returning.webContents.on('ipc-message', (_event, channel) => {
+      if (channel === 'glkvm:login-required') loginReported = true;
+      if (channel === 'glkvm:viewer-page-ready') readyReported = true;
+    });
+    await returning.webContents.executeJavaScript('window.logout()');
+    await waitFor(() => loginReported);
+    await returning.webContents.executeJavaScript("document.querySelector('#login').remove()");
+    await waitFor(() => readyReported);
+    assert.equal(await returning.webContents.executeJavaScript("document.querySelector('#stream-video') === null"), true, 'Returning authentication completes without a live video');
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
     assert.ok(failed);
     const errorWindow = coverFor(failed);
