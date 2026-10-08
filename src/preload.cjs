@@ -99,6 +99,8 @@ function handleKeyboardShortcut(event) {
   if (!event.isTrusted || !keyboard || !playerFocused()) return false;
   const code = event.code;
   const modifier = modifierNames[code];
+  // Command+Tab belongs to macOS, including when Command was already forwarded.
+  if (event.metaKey && code === 'Tab') { releaseInput(); return true; }
   if (modifier && event.type === 'keydown') heldModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
   if (modifier && event.type === 'keyup') heldModifiers.delete(code);
   const action = keyboardActions.find(name => {
@@ -116,7 +118,7 @@ function handleKeyboardShortcut(event) {
     if (event.type === 'keyup') consumedKeys.delete(code);
     return true;
   }
-  if (event.type === 'keydown' && modifier && !pressedKeys.has(code) && keyboardActions.some(name => keyboard?.[name]?.[modifier])) {
+  if (event.type === 'keydown' && modifier && !pressedKeys.has(code) && !pressedButtons.size && (modifier === 'meta' || keyboardActions.some(name => keyboard?.[name]?.[modifier]))) {
     pendingModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
     return true;
   }
@@ -191,7 +193,7 @@ function releaseInput(preserveLocalModifiers = false) {
   releasing = true;
   try {
     if (player) {
-      for (const key of pressedKeys.values()) player.dispatchEvent(new KeyboardEvent('keyup', { ...key, bubbles: true }));
+      for (const key of pressedKeys.values()) player.dispatchEvent(new KeyboardEvent('keyup', { ...key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, bubbles: true }));
       const target = player.querySelector('#video-wrapper') || player;
       for (const button of pressedButtons) target.dispatchEvent(new MouseEvent('mouseup', { button, bubbles: true }));
       player.blur();
@@ -241,7 +243,8 @@ for (const name of [
     }
     const pause = isPauseShortcut(event);
     if (pause) pauseKeys.add(/** @type {KeyboardEvent} */ (event).code);
-    if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent)) {
+    const playerMouse = event instanceof MouseEvent && !!player && event.target instanceof Node && player.contains(event.target);
+    if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent) && !playerMouse) {
       if (pause) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
     }
@@ -254,7 +257,9 @@ for (const name of [
       if (name === 'keyup') pressedKeys.delete(event.code || event.key);
     }
     if (event instanceof MouseEvent) {
-      if (name === 'mousedown') { flushModifiers(); pressedButtons.add(event.button); player?.focus({ preventScroll: true }); }
+      // A modifier can be pressed before the click or during an existing drag.
+      if (name === 'mousedown' || ((name === 'mousemove' || name === 'mouseup') && pressedButtons.size)) flushModifiers();
+      if (name === 'mousedown') { pressedButtons.add(event.button); player?.focus({ preventScroll: true }); }
       if (name === 'mouseup') pressedButtons.delete(event.button);
     }
   }, { capture: true, passive: false });
