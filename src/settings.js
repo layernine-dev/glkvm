@@ -90,7 +90,7 @@ document.querySelector('#add-device').addEventListener('click', () => {
 document.querySelector('#settings-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   // Leave the saved values in place until the save succeeds; audio status reports the saved mute.
-  const value = { ...config, controlEnabled: document.querySelector('#control-enabled').checked, muted: document.querySelector('#muted').checked };
+  const value = { ...config, controlEnabled: document.querySelector('#control-enabled').checked, muted: document.querySelector('#muted').checked, experimentalPauseBackgroundVideo: document.querySelector('#experimental-pause-background-video').checked };
   document.querySelector('#save').disabled = true;
   try {
     const result = await settings.save(value);
@@ -101,10 +101,12 @@ document.querySelector('#settings-form').addEventListener('submit', async (event
 });
 document.querySelector('#control-enabled').addEventListener('change', changed);
 document.querySelector('#muted').addEventListener('change', changed);
+document.querySelector('#experimental-pause-background-video').addEventListener('change', changed);
 settings.load().then(async value => {
   config = value;
   document.querySelector('#control-enabled').checked = config.controlEnabled;
   document.querySelector('#muted').checked = config.muted;
+  document.querySelector('#experimental-pause-background-video').checked = config.experimentalPauseBackgroundVideo === true;
   render();
   settings.onAudio(snapshot => { audio = snapshot; refreshAudio(); });
   audio = await settings.audio();

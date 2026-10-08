@@ -48,6 +48,24 @@ app.whenReady().then(async () => {
     assert.deepEqual(sizes.at(-1), { width: 640, height: 360 });
     const before = await win.webContents.executeJavaScript("document.querySelector('#stream-video').getVideoPlaybackQuality().totalVideoFrames");
     await waitFor(win, `document.querySelector('#stream-video').getVideoPlaybackQuality().totalVideoFrames > ${before}`);
+    // Experimental pause releases local playback while preserving the live stream.
+    win.webContents.send('glkvm:background-video', true);
+    await waitFor(win, "document.querySelector('#stream-video').paused");
+    assert.equal(await win.webContents.executeJavaScript("document.querySelector('#stream-video').srcObject.getVideoTracks()[0].readyState"), 'live');
+    await win.webContents.executeJavaScript("void document.querySelector('#stream-video').play()");
+    await waitFor(win, "document.querySelector('#stream-video').paused");
+    win.webContents.send('glkvm:background-video', false);
+    await waitFor(win, "!document.querySelector('#stream-video').paused");
+    const resumed = await win.webContents.executeJavaScript("document.querySelector('#stream-video').getVideoPlaybackQuality().totalVideoFrames");
+    await waitFor(win, `document.querySelector('#stream-video').getVideoPlaybackQuality().totalVideoFrames > ${resumed}`);
+    // A video paused by the page must stay paused after the experiment is disabled.
+    await win.webContents.executeJavaScript("document.querySelector('#stream-video').pause()");
+    win.webContents.send('glkvm:background-video', true);
+    await new Promise(resolve => setTimeout(resolve, 600));
+    win.webContents.send('glkvm:background-video', false);
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(await win.webContents.executeJavaScript("document.querySelector('#stream-video').paused"), true);
+    await win.webContents.executeJavaScript("document.querySelector('#stream-video').play()");
     const pixels = (await win.webContents.capturePage()).toBitmap();
     for (const [x, y] of [[480, 270], [200, 2], [2, 270], [958, 270], [480, 538]]) {
       const offset = (y * 960 + x) * 4;

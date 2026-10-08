@@ -233,6 +233,15 @@ Changing the default input mode also applies it to open KVM windows. The per-win
 menu toggle lasts until the window closes or that default changes. App audio
 muting does not turn on the device's own speaker setting. Hidden login helpers are always muted to avoid duplicate audio.
 
+**Controls → Experimental → Pause video in background** is off by default.
+When enabled, live MediaStream video in an unfocused, hidden or minimized viewer
+pauses locally and resumes when the viewer regains focus or the switch is disabled.
+The connection and its tracks are kept open. Videos already paused by the device
+page are not resumed by the experiment. Shared windows freeze while unfocused;
+audio carried by those video elements pauses too. Direct H.264 canvas playback
+and hidden login helpers are unaffected. This experiment may release video display
+wake locks, but does not guarantee display sleep or remove WebRTC system-sleep locks.
+
 Local settings are stored atomically in
 `~/Library/Application Support/GLKVM Clean/settings.json`. Renaming a connection
 retains its login session. Changing its address uses a separate session partition;

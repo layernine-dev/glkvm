@@ -16,6 +16,43 @@ let ready = false;
 let controlEnabled = false;
 let moving = false;
 let options = false;
+let pauseBackgroundVideo = false;
+/** Only videos paused by this experiment are resumed. @type {Set<HTMLVideoElement>} */
+const backgroundPausedVideos = new Set();
+/** @type {WeakSet<HTMLVideoElement>} */
+const resumingBackgroundVideos = new WeakSet();
+/** @type {WeakSet<HTMLVideoElement>} */
+const warnedBackgroundVideos = new WeakSet();
+
+function syncBackgroundVideo() {
+  for (const video of backgroundPausedVideos) {
+    if (!video.isConnected) { backgroundPausedVideos.delete(video); continue; }
+    if (!pauseBackgroundVideo && !resumingBackgroundVideos.has(video)) {
+      resumingBackgroundVideos.add(video);
+      void video.play().then(() => {
+        if (!pauseBackgroundVideo && !video.paused) {
+          backgroundPausedVideos.delete(video);
+          warnedBackgroundVideos.delete(video);
+        }
+      }).catch(error => {
+        // Keep ownership so the next synchronization can retry a transient failure.
+        if (!warnedBackgroundVideos.has(video)) {
+          warnedBackgroundVideos.add(video);
+          console.warn('Could not resume experimental background video; retrying:', error);
+        }
+      }).finally(() => resumingBackgroundVideos.delete(video));
+    }
+  }
+  if (!pauseBackgroundVideo) return;
+  for (const video of document.querySelectorAll('video')) {
+    if (!video.paused && !video.ended && video.srcObject instanceof MediaStream) {
+      backgroundPausedVideos.add(video);
+      video.pause();
+    }
+  }
+}
+// Reapply if the device page starts or restarts playback while in the background.
+document.addEventListener('play', syncBackgroundVideo, true);
 let deviceName = '';
 /** @type {{width: number, height: number} | null} */
 let videoPoints = null;
@@ -163,8 +200,14 @@ function releaseInput(preserveLocalModifiers = false) {
   } finally { pressedKeys.clear(); pressedButtons.clear(); releasing = false; }
 }
 ipcRenderer.on('glkvm:release-input', releaseInput);
+ipcRenderer.on('glkvm:background-video', (_event, paused) => {
+  pauseBackgroundVideo = paused === true;
+  syncBackgroundVideo();
+});
 ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
+  pauseBackgroundVideo = mode?.pauseBackgroundVideo === true;
+  syncBackgroundVideo();
   keyboard = mode?.keyboard;
   loginStatus = typeof mode?.loginStatus === 'string' ? mode.loginStatus : '';
   controlEnabled = mode?.controlEnabled === true;
@@ -218,6 +261,7 @@ for (const name of [
 }
 
 function update() {
+  syncBackgroundVideo();
   const root = document.documentElement;
   root.toggleAttribute('data-glkvm-options', options);
   root.toggleAttribute('data-glkvm-sized', options && !!videoPoints);
