@@ -468,7 +468,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.once('ready-to-show', () => { if (!entry.background && (consoleWindow || entry.manualLogin || (entry.pageLoaded && entry.pageReady && !entry.needsLogin))) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
-    if (!consoleWindow && entry.loginStatus === 'Connecting to video…') {
+    if (!consoleWindow) {
       if (entry.loginTimer) clearTimeout(entry.loginTimer);
       entry.loginTimer = null;
       entry.loginStatus = 'Could not connect to the device. Check the network connection. Use Device → Reload to retry.';
@@ -623,11 +623,12 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
         entry.device = updated;
         const clean = windows.get(updated.id) === entry;
         if (clean && passwordChanged && !updated.encryptedPassword) {
-          if (entry.loginTimer) clearTimeout(entry.loginTimer);
-          entry.loginTimer = null;
-          entry.loginStatus = '';
-          dismissCover(entry);
-          if (entry.needsLogin) setDeviceOptions(entry, true);
+          if (entry.needsLogin) {
+            if (entry.loginTimer) clearTimeout(entry.loginTimer);
+            entry.loginTimer = null;
+            entry.loginStatus = '';
+            setDeviceOptions(entry, true);
+          }
           const helper = consoles.get(updated.id);
           if (helper?.background) helper.window.close();
         }
@@ -869,7 +870,10 @@ function openStartupDevices() {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (windows.size) windows.values().next().value?.window.focus(); else openStartupDevices(); });
+  app.on('second-instance', () => {
+    const entry = windows.values().next().value;
+    if (entry) showDevice(entry.device); else openStartupDevices();
+  });
   app.whenReady().then(async () => {
     // Refresh the running app's Dock icon independently of Launch Services caches.
     app.dock?.setIcon(path.join(__dirname, '../assets/icon.png'));

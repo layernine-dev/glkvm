@@ -11,7 +11,10 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-cover-'));
 app.setPath('userData', directory);
 const fixture = fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8');
 // Hold both the login page and authenticated reload so visibility races are observable.
-const failureServer = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end(fixture); });
+const failureServer = createServer((request, response) => {
+  if (request.headers.host?.startsWith('localhost:')) { response.destroy(); return; }
+  response.setHeader('content-type', 'text/html'); response.end(fixture);
+});
 const server = createServer((_request, response) => {
   setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, 1500);
 });
@@ -39,6 +42,7 @@ server.listen(0, '127.0.0.1', async () => {
     const config = defaults();
     config.devices = ['clean', 'options'].map(id => ({ id, name: id, origin: `http://${id === 'options' ? 'localhost' : '127.0.0.1'}:${address.port}`, openAtStartup: true, startMode: id === 'options' ? 'options-enabled' : 'window-decoration-less' }));
     config.devices.push({ id: 'failed', name: 'failed', origin: `http://127.0.0.1:${failureAddress.port}`, openAtStartup: true, startMode: 'options-enabled' });
+    config.devices.push({ id: 'offline', name: 'offline', origin: `http://localhost:${failureAddress.port}`, openAtStartup: true });
     const saved = await prepareConfig({ ...config, devices: config.devices.map(device => ({ ...device, password: device.id === 'failed' ? 'incorrect-fixture-secret' : 'fixture-secret' })) }, config, safeStorage);
     fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(saved));
     require('../src/main.cjs');
@@ -57,6 +61,9 @@ server.listen(0, '127.0.0.1', async () => {
       });
     }
     await waitFor(() => covers.every(progress => progress?.isVisible()));
+    app.emit('second-instance', {}, [], process.cwd());
+    await waitFor(() => covers.find(progress => progress?.getTitle() === 'clean — Connecting')?.isFocused());
+    assert.equal(viewers.every(window => !window.isVisible()), true, 'Duplicate launch activates progress without exposing the viewer');
     await waitFor(() => viewers.every(window => !window.webContents.isLoading()));
     assert.equal(await viewers.find(window => window.getTitle() === 'options')?.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"), true);
     for (const [index, window] of viewers.entries()) assert.equal(coverFor(window), covers[index], 'Both startup modes hide the vendor login page');
@@ -109,6 +116,24 @@ server.listen(0, '127.0.0.1', async () => {
     await restored.webContents.executeJavaScript("document.querySelector('[data-action=manual]').click()");
     await waitFor(() => failed.isVisible() && restored.isDestroyed());
     assert.equal(await failed.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"), true, 'Both shortcut and button expose manual controls');
+
+    const offline = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'offline');
+    assert.ok(offline);
+    const offlineCover = coverFor(offline);
+    assert.ok(offlineCover);
+    await waitFor(() => offlineCover.webContents.executeJavaScript("document.querySelector('#status').textContent.startsWith('Could not connect')"));
+    Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Settings…')?.click();
+    await waitFor(() => BrowserWindow.getAllWindows().some(window => window.getTitle() === 'GLKVM Clean Settings' && !window.webContents.isLoading()));
+    const settings = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'GLKVM Clean Settings');
+    assert.ok(settings);
+    assert.equal(await settings.webContents.executeJavaScript(`(async () => {
+      const value = await window.settings.load();
+      value.devices.find(device => device.id === 'offline').removePassword = true;
+      return (await window.settings.save(value)).ok;
+    })()`), true);
+    assert.equal(coverFor(offline), offlineCover, 'Removing a password preserves network failure feedback');
+    assert.equal(offlineCover.isVisible(), true);
+    assert.equal(offline.isVisible(), false);
 
     console.log('PASS: local startup progress in both start modes, hidden vendor login, unchanged progress window through session reload, authenticated reveal, bounded failure and manual login');
     failureServer.close(); server.close(); app.exit(0);
