@@ -62,6 +62,7 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => viewers.every(window => coverFor(window)));
     const early = viewers.find(window => window.getTitle() === 'clean');
     assert.ok(early);
+    const cleanInitialSize = early.getSize();
     const earlyCover = coverFor(early);
     assert.ok(earlyCover);
     await waitFor(() => !earlyCover.webContents.isLoading() && earlyCover.isVisible());
@@ -126,10 +127,13 @@ server.listen(0, '127.0.0.1', async () => {
     app.hide();
     await waitFor(() => app.isHidden());
     reloading.webContents.reload();
-    await waitFor(() => coverFor(reloading) && !reloading.webContents.isLoading());
+    await waitFor(() => coverFor(reloading) && !coverFor(reloading)?.webContents.isLoading());
     assert.equal(app.isHidden(), true, 'A navigation begun while hidden keeps the app hidden');
     assert.equal(coverFor(reloading)?.isVisible(), false, 'A newly created cover respects app hiding');
     app.show(); app.focus({ steal: true });
+    await waitFor(() => coverFor(reloading)?.isVisible());
+    assert.equal(reloading.webContents.isLoading(), true, 'Activation occurs during the delayed navigation');
+    assert.equal(reloading.isVisible(), false, 'App unhide never restores the loading remote viewer behind progress');
     await waitFor(() => reloading.isVisible() && !coverFor(reloading) && reloading.isFocusable());
     reloading.focus();
     await waitFor(() => reloading.isFocused());
@@ -205,6 +209,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(await failed.webContents.executeJavaScript("document.querySelector('input[type=password]').getBoundingClientRect().width > 0"), true, 'Manual login fields are accessible');
     controls.click();
     await waitFor(() => !failed.isVisible() && coverFor(failed)?.isVisible());
+    assert.deepEqual(failed.getSize(), cleanInitialSize, 'Repeatedly opening startup-enabled controls preserves clean-view bounds');
     const restored = coverFor(failed);
     assert.ok(restored);
     await restored.webContents.executeJavaScript("document.querySelector('[data-action=manual]').click()");

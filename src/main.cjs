@@ -63,8 +63,8 @@ function dismissCover(entry) {
 function ensureCover(entry) {
   if (entry.manualLogin || !isViewer(entry)) return;
   if (!entry.cover) entry.revealMinimized = entry.window.isMinimized();
-  if (entry.window.isVisible() && !entry.window.isMinimized()) {
-    if (!entry.cover) entry.revealActive = entry.window.isFocused();
+  if (!entry.window.isMinimized()) {
+    if (!entry.cover && entry.window.isVisible()) entry.revealActive = entry.window.isFocused();
     entry.window.hide();
   }
   if (entry.cover) return;
@@ -84,6 +84,7 @@ function revealDevice(entry) {
   entry.loginStatus = '';
   entry.manualLogin = false;
   if (app.isHidden()) return;
+  if (!entry.cover) { sendMode(entry); return; }
   const focused = BrowserWindow.getFocusedWindow();
   const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
   dismissCover(entry);
@@ -523,12 +524,13 @@ function setDeviceOptions(entry, enabled, manual = true) {
   }
   const win = entry.window;
   releaseInput(entry);
+  if (enabled && !entry.options) entry.cleanBounds = win.getBounds();
   entry.options = enabled;
   entry.chrome = null;
   win.webContents.setIgnoreMenuShortcuts(false);
   win.setAspectRatio(0);
   if (entry.options) {
-    entry.cleanBounds = win.getBounds();
+    entry.cleanBounds ||= win.getBounds();
     win.setMinimumSize(720, 500);
     if (!win.isFullScreen()) {
       const work = screen.getDisplayMatching(win.getBounds()).workArea;
