@@ -100,8 +100,9 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => !reloading.webContents.isLoading() && !coverFor(reloading));
     assert.equal(app.isActive(), false, 'Reload completion does not reactivate an inactive app');
     assert.equal(reloading.isFocused(), false, 'Reload completion does not steal focus after app deactivation');
-    app.focus({ steal: true }); reloading.show();
-    await waitFor(() => reloading.isVisible());
+    await waitFor(() => reloading.isFocusable());
+    app.focus({ steal: true }); reloading.show(); reloading.focus();
+    await waitFor(() => reloading.isVisible() && reloading.isFocused());
     reloading.minimize();
     await waitFor(() => reloading.isMinimized());
     reloading.webContents.reload();
