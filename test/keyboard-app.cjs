@@ -124,6 +124,10 @@ server.listen(0, '127.0.0.1', async () => {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
     await new Promise(resolve => setTimeout(resolve, 150));
     assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'The local Center shortcut never becomes a remote Command tap');
+    press('C', []);
+    await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length >= 2'));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'KeyC'], ['keyup', 'KeyC']], 'A release dropped by a native shortcut handler never swallows the next plain key');
+    await win.webContents.executeJavaScript('window.keyLog = []');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Meta', modifiers: ['meta'] });
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Shift', modifiers: ['meta', 'shift'] });
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'H', modifiers: ['meta', 'shift'] });
@@ -131,8 +135,8 @@ server.listen(0, '127.0.0.1', async () => {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Shift', modifiers: ['meta'] });
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
     press('H', []);
-    await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length >= 2'));
-    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'KeyH'], ['keyup', 'KeyH']], 'A release dropped by the native shortcut handler never swallows the next plain key');
+    await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length >= 8'));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'MetaLeft'], ['keydown', 'ShiftLeft'], ['keydown', 'KeyH'], ['keyup', 'KeyH'], ['keyup', 'ShiftLeft'], ['keyup', 'MetaLeft'], ['keydown', 'KeyH'], ['keyup', 'KeyH']], 'Command+Shift+H remains remote because only unshifted Command+H is a local shortcut');
     await win.webContents.executeJavaScript("window.keyLog = []; window.mouseReleases = 0; document.querySelector('#video-wrapper').dispatchEvent(new MouseEvent('mousedown', {button:0,bubbles:true})); document.body.dispatchEvent(new MouseEvent('mouseup', {button:0,bubbles:true}));");
     assert.equal(await win.webContents.executeJavaScript('window.mouseReleases'), 1, 'A drag ending outside the player releases the remote mouse button');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Shift', modifiers: ['shift'] });

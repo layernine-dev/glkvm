@@ -140,7 +140,7 @@ function handleAppShortcuts(contents, pageConsumes = false) {
     const accelerator = `CommandOrControl+${input.shift ? 'Shift+' : ''}${key}`;
     const action = appShortcuts().get(accelerator);
     // Menu shortcuts may consume the key before the renderer sees it.
-    const menuCommand = [',', 'H', 'M', 'R', 'Q', 'W'].includes(key) || (input.shift && key === 'C');
+    const menuCommand = input.shift ? ['C', 'M'].includes(key) : [',', 'H', 'M', 'R', 'Q', 'W'].includes(key);
     if (pageConsumes && input.type === 'keyDown' && (action || menuCommand)) {
       contents.send('glkvm:local-shortcut');
       dropped.add(input.code);

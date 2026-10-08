@@ -107,8 +107,9 @@ function handleKeyboardShortcut(event) {
   // These combinations belong to macOS or the app. Native handlers may consume
   // their keydown, but a renderer keyup must not replay the pending modifiers.
   const localCommand = event.metaKey && !event.ctrlKey && !event.altKey && (
-    ['Tab', 'KeyQ', 'KeyW', 'KeyR', 'Comma', 'KeyH', 'KeyM'].includes(code)
-    || /^Digit[1-9]$/.test(code) || (event.shiftKey && ['KeyO', 'KeyC'].includes(code))
+    code === 'Tab' || (event.shiftKey
+      ? ['KeyO', 'KeyC', 'KeyM'].includes(code)
+      : ['KeyQ', 'KeyW', 'KeyR', 'Comma', 'KeyH', 'KeyM'].includes(code) || /^Digit[1-9]$/.test(code))
   );
   if (localCommand) {
     consumeModifiers();
