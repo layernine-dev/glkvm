@@ -192,6 +192,13 @@ server.listen(0, '127.0.0.1', async () => {
     app.show(); app.focus({ steal: true });
     await waitFor(() => manual.isVisible());
     assert.equal(await manual.webContents.executeJavaScript("document.querySelector('input[type=password]').getBoundingClientRect().width > 0"), true, 'Reload returns to usable manual login without saved credentials');
+    await waitFor(() => manual.isFocusable());
+    manual.focus(); await waitFor(() => manual.isFocused());
+    manual.minimize(); await waitFor(() => manual.isMinimized());
+    manual.webContents.reload();
+    await waitFor(() => !manual.webContents.isLoading() && !coverFor(manual));
+    assert.equal(manual.isMinimized(), true, 'Passwordless login also preserves minimization');
+
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
     assert.ok(failed);
     const errorWindow = coverFor(failed);

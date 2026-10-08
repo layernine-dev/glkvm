@@ -76,6 +76,18 @@ function ensureCover(entry) {
   });
   handleAppShortcuts(entry.cover.window.webContents, false);
 }
+/** @param {Entry} entry @param {boolean} active @param {Electron.BrowserWindow | null} [focused] */
+function showViewer(entry, active, focused = BrowserWindow.getFocusedWindow()) {
+  if (entry.background || app.isHidden() || entry.window.isVisible()) return;
+  if (active) entry.window.show();
+  else {
+    // Frameless macOS windows can activate asynchronously even with showInactive.
+    entry.window.setFocusable(false);
+    entry.window.showInactive();
+    setImmediate(() => { if (!entry.window.isDestroyed()) entry.window.setFocusable(true); });
+    if (focused && !focused.isDestroyed()) focused.focus();
+  }
+}
 /** @param {Entry} entry */
 function revealDevice(entry) {
   if (!entry.pageLoaded || !entry.pageReady || entry.needsLogin) return;
@@ -89,16 +101,7 @@ function revealDevice(entry) {
   const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
   dismissCover(entry);
   sendMode(entry);
-  if (!entry.background && !entry.revealMinimized && !entry.window.isVisible()) {
-    if (active) entry.window.show();
-    else {
-      // Frameless macOS windows can activate asynchronously even with showInactive.
-      entry.window.setFocusable(false);
-      entry.window.showInactive();
-      setImmediate(() => { if (!entry.window.isDestroyed()) entry.window.setFocusable(true); });
-      if (focused && !focused.isDestroyed()) focused.focus();
-    }
-  }
+  if (!entry.revealMinimized) showViewer(entry, !!active, focused);
 }
 /** @param {Entry} entry @param {string} [status] */
 function beginLogin(entry, status = 'Signing in…') {
@@ -769,8 +772,9 @@ ipcMain.on('glkvm:login-required', event => {
   if (!entry.device.encryptedPassword) {
     if (entry.loginTimer) clearTimeout(entry.loginTimer);
     entry.loginTimer = null;
+    const active = app.isActive();
     dismissCover(entry); entry.loginStatus = ''; sendMode(entry);
-    if (!entry.background && !app.isHidden()) entry.window.show();
+    if (!entry.window.isMinimized()) showViewer(entry, active);
     return;
   }
   entry.pageReady = false;
@@ -863,7 +867,7 @@ app.on('did-become-active', () => {
   if (app.isHidden()) return;
   for (const entry of windows.values()) {
     if (!entry.cover) {
-      if (entry.needsLogin && !entry.device.encryptedPassword && !entry.background && !entry.window.isVisible() && !entry.window.isMinimized()) entry.window.showInactive();
+      if (entry.needsLogin && !entry.device.encryptedPassword && !entry.background && !entry.window.isVisible() && !entry.window.isMinimized()) showViewer(entry, !BrowserWindow.getFocusedWindow());
       continue;
     }
     revealDevice(entry);
