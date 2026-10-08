@@ -83,7 +83,7 @@ function revealDevice(entry) {
   entry.loginStatus = '';
   entry.manualLogin = false;
   const focused = BrowserWindow.getFocusedWindow();
-  const active = entry.cover?.window.isFocused() || (entry.revealActive && (!focused || focused === entry.window));
+  const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
   dismissCover(entry);
   sendMode(entry);
   if (!entry.background && !entry.window.isVisible()) {
@@ -475,7 +475,7 @@ function showDevice(device, consoleWindow = false, background = false) {
     entry.pageLoaded = true;
     if (!consoleWindow) revealDevice(entry);
   });
-  win.once('ready-to-show', () => { if (!entry.background && (consoleWindow || entry.manualLogin || (entry.pageLoaded && entry.pageReady && !entry.needsLogin))) win.show(); });
+  win.once('ready-to-show', () => { if (!entry.background && (consoleWindow || entry.manualLogin)) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
     navigationFailed = true;

@@ -90,9 +90,17 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(window.webContents.isLoading(), false, 'Reveal only after the authenticated page finishes loading');
     }
     const reloading = viewers[0];
+    app.focus({ steal: true }); reloading.focus();
+    await waitFor(() => reloading.isFocused());
     reloading.webContents.reload();
     await waitFor(() => !reloading.isVisible() && coverFor(reloading));
-    await waitFor(() => reloading.isVisible() && !coverFor(reloading));
+    app.hide();
+    await waitFor(() => !app.isActive());
+    await waitFor(() => !reloading.webContents.isLoading() && !coverFor(reloading));
+    assert.equal(app.isActive(), false, 'Reload completion does not reactivate an inactive app');
+    assert.equal(reloading.isFocused(), false, 'Reload completion does not steal focus after app deactivation');
+    app.focus({ steal: true }); reloading.show();
+    await waitFor(() => reloading.isVisible());
     // A returning SPA login must report authenticated readiness again without HDMI video.
     const returning = viewers.find(window => window.getTitle() === 'options');
     assert.ok(returning);
