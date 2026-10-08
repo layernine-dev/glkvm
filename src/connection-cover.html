@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+  <title>Connecting</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111; color: #eee; font: 14px system-ui; }
+    main { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
+    h1 { margin: 0; font-size: 18px; font-weight: 500; }
+    #status { color: #aaa; max-width: 460px; }
+    #spinner { width: 22px; height: 22px; border: 2px solid #444; border-top-color: #ccc; border-radius: 50%; visibility: hidden; }
+    .busy #spinner { visibility: visible; animation: spin 1s linear infinite; }
+    main button { background: #252525; color: #ccc; border: 1px solid #444; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #77baff; outline-offset: 3px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .busy #spinner { animation: none; } }
+  </style>
+</head>
+<body class="busy">
+
+  <main><div id="spinner" aria-hidden="true"></div><h1 id="name">Connecting</h1><div id="status" role="status">Connecting…</div><button data-action="manual">Open device controls</button></main>
+</body>
+</html>

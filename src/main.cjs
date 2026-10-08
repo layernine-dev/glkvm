@@ -6,6 +6,7 @@ if (process.platform === 'darwin' && !app.isPackaged) {
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { createCover } = require('./connection-cover.cjs');
 const { isDeviceURL } = require('./devices.cjs');
 const { defaults, readConfig, writeConfig, partitionFor } = require('./config.cjs');
 const { publicConfig, prepareConfig, readPassword } = require('./credentials.cjs');
@@ -21,7 +22,7 @@ const { setupUpdates } = require('./updates.cjs');
 let updates = null;
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, cover: ReturnType<typeof createCover> | null, pageReady: boolean, pageLoaded: boolean, manualLogin: boolean, revealActive: boolean, revealMinimized: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -44,17 +45,68 @@ const settingsURL = pathToFileURL(path.join(__dirname, 'settings.html')).href;
 function allEntries() { return [...windows.values(), ...consoles.values()]; }
 function focusedEntry() {
   const focused = BrowserWindow.getFocusedWindow();
-  return allEntries().find(entry => entry.window === focused);
+  return allEntries().find(entry => entry.window === focused || entry.cover?.window === focused);
 }
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
+  entry.cover?.update(entry.loginStatus, entry.device.name);
   entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
+}
+/** @param {Entry} entry */
+function dismissCover(entry) {
+  const cover = entry.cover;
+  entry.cover = null;
+  cover?.close();
+}
+/** @param {Entry} entry */
+function ensureCover(entry) {
+  if (entry.manualLogin || !isViewer(entry)) return;
+  if (!entry.cover) entry.revealMinimized = entry.window.isMinimized();
+  if (!entry.window.isMinimized()) {
+    if (!entry.cover && entry.window.isVisible()) entry.revealActive = entry.window.isFocused();
+    entry.window.hide();
+  }
+  if (entry.cover) return;
+  entry.cover = createCover(entry.window, entry.device.name, action => {
+    if (action === 'manual') setDeviceOptions(entry, true);
+    else if (action === 'close') entry.window.close();
+    else if (action === 'focus') { lastDeviceId = entry.device.id; installMenu(); }
+  });
+  handleAppShortcuts(entry.cover.window.webContents, false);
+}
+/** @param {Entry} entry @param {boolean} active @param {Electron.BrowserWindow | null} [focused] */
+function showViewer(entry, active, focused = BrowserWindow.getFocusedWindow()) {
+  if (entry.background || app.isHidden() || entry.window.isVisible()) return;
+  if (active) entry.window.show();
+  else {
+    // Frameless macOS windows can activate asynchronously even with showInactive.
+    entry.window.setFocusable(false);
+    entry.window.showInactive();
+    setImmediate(() => { if (!entry.window.isDestroyed()) entry.window.setFocusable(true); });
+    if (focused && !focused.isDestroyed()) focused.focus();
+  }
+}
+/** @param {Entry} entry */
+function revealDevice(entry) {
+  if (!entry.pageLoaded || !entry.pageReady || entry.needsLogin) return;
+  if (entry.loginTimer) clearTimeout(entry.loginTimer);
+  entry.loginTimer = null;
+  entry.loginStatus = '';
+  entry.manualLogin = false;
+  if (app.isHidden()) return;
+  if (!entry.cover) { sendMode(entry); return; }
+  const focused = BrowserWindow.getFocusedWindow();
+  const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
+  dismissCover(entry);
+  sendMode(entry);
+  if (!entry.revealMinimized) showViewer(entry, !!active, focused);
 }
 /** @param {Entry} entry @param {string} [status] */
 function beginLogin(entry, status = 'Signing in…') {
   if (entry.loginTimer) clearTimeout(entry.loginTimer);
   entry.loginStatus = status;
+  ensureCover(entry);
   // Start before loading the helper: unreachable devices never install a preload.
   entry.loginTimer = setTimeout(() => {
     entry.loginTimer = null;
@@ -317,14 +369,18 @@ function sendStartup(entry) {
 }
 
 /** @param {Device} device @param {boolean} [consoleWindow] @param {boolean} [background] */
-function showDevice(device, consoleWindow = false, background = false) {
+function showDevice(device, consoleWindow = false, background = false, activate = true) {
   const collection = consoleWindow ? consoles : windows;
   const existing = collection.get(device.id);
   if (existing) {
     if (!background) {
       existing.background = false;
-      if (existing.window.isMinimized()) existing.window.restore();
-      existing.window.show(); existing.window.focus();
+      if (existing.cover) {
+        existing.revealMinimized = false;
+        existing.window.hide();
+      } else if (existing.window.isMinimized()) existing.window.restore();
+      const target = existing.cover?.window || existing.window;
+      target.show(); target.focus();
     }
     return existing;
   }
@@ -355,16 +411,31 @@ function showDevice(device, consoleWindow = false, background = false) {
     },
   });
   // A viewer opened while audio switching is paused uses the background profile until resumed.
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
+  /** @type {Entry} */
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, cover: null, pageReady: false, pageLoaded: false, manualLogin: false, revealActive: true, revealMinimized: false, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
   updateCatalog();
-  if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true);
+  if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true, false);
   applyMute(entry);
-  win.on('closed', () => { if (entry.loginTimer) clearTimeout(entry.loginTimer); if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer); collection.delete(device.id); installMenu(); updateCatalog(); syncAudio(); });
+  win.on('closed', () => {
+    dismissCover(entry);
+    if (entry.loginTimer) clearTimeout(entry.loginTimer);
+    if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer);
+    collection.delete(device.id);
+    const helper = !consoleWindow && consoles.get(device.id);
+    if (helper && helper.background) helper.window.close();
+    installMenu(); updateCatalog(); syncAudio();
+  });
   // Audio profiles follow native window focus and visibility, not player focus.
   if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => syncAudio());
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
   win.on('blur', () => { if (!consoleWindow) releaseInput(entry); });
+  win.on('restore', () => {
+    if (!entry.cover) return;
+    entry.revealMinimized = false;
+    win.hide();
+    entry.cover.window.show(); entry.cover.window.focus();
+  });
   win.on('resized', installMenu);
   win.on('moved', installMenu);
   win.on('enter-full-screen', installMenu);
@@ -373,27 +444,35 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
+  let navigationFailed = false;
   if (!consoleWindow) {
     // A reload or sign-in replaces the page: mute until the new page confirms its speaker,
     // and ignore late reports from the old page. Same-document changes keep the page.
-    /** @type {{ready: boolean} | null} */
+    /** @type {{ready: boolean, pageReady: boolean, pageLoaded: boolean} | null} */
     let leaving = null;
     win.webContents.on('did-start-navigation', details => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      leaving ||= { ready: entry.audio.ready };
+      navigationFailed = false;
+      leaving ||= { ready: entry.audio.ready, pageReady: entry.pageReady, pageLoaded: entry.pageLoaded };
       entry.audio.ready = false;
       entry.audio.status = null;
       applyMute(entry);
+      if (!entry.loginTimer) beginLogin(entry, 'Connecting to video…');
+      else ensureCover(entry);
+      entry.pageReady = false;
+      entry.pageLoaded = false;
     });
     win.webContents.on('did-navigate', () => { leaving = null; });
     // A navigation that never committed (blocked, aborted, no content) keeps the old page; route it again.
     win.webContents.on('did-stop-loading', () => {
       const previous = leaving;
       leaving = null;
-      if (!previous?.ready || win.isDestroyed()) return;
-      entry.audio.ready = true;
-      entry.audio.route = null;
-      syncAudio();
+      if (!previous || navigationFailed || win.isDestroyed()) return;
+      entry.pageReady = previous.pageReady;
+      entry.pageLoaded = previous.pageLoaded;
+      entry.audio.ready = previous.ready;
+      revealDevice(entry);
+      if (previous.ready) { entry.audio.route = null; syncAudio(); }
     });
   }
   handleAppShortcuts(win.webContents, !consoleWindow);
@@ -407,28 +486,33 @@ function showDevice(device, consoleWindow = false, background = false) {
     win.webContents.setIgnoreMenuShortcuts(localAction || remoteEdit);
   });
   win.webContents.on('did-finish-load', () => {
-    // Authentication is complete even when there is no HDMI signal to decode.
-    if (!consoleWindow && !entry.needsLogin && entry.loginStatus) {
-      if (entry.loginTimer) clearTimeout(entry.loginTimer);
-      entry.loginTimer = null;
-      entry.loginStatus = '';
-      sendMode(entry);
-    }
+    entry.pageLoaded = true;
+    if (!consoleWindow) revealDevice(entry);
   });
-  win.once('ready-to-show', () => { if (!entry.background) win.show(); });
+  win.once('ready-to-show', () => { if (!entry.background && (consoleWindow || entry.manualLogin)) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
-    if (!consoleWindow && entry.loginStatus === 'Connecting to video…') {
+    navigationFailed = true;
+    if (!consoleWindow) {
       if (entry.loginTimer) clearTimeout(entry.loginTimer);
       entry.loginTimer = null;
       entry.loginStatus = 'Could not connect to the device. Check the network connection. Use Device → Reload to retry.';
       sendMode(entry);
     }
     if (entry.background) return;
-    win.show();
-    if (code <= -200 && code >= -299) return;
+    entry.cover?.update(`Could not connect to ${device.name}. Check the device and network connection.`);
+    if (!entry.cover) win.show();
+    if (entry.cover || (code <= -200 && code >= -299)) return;
     void dialog.showMessageBox(win, { type: 'error', message: `Could not connect to ${device.name}`, detail: `Check the device and network connection. Use Device → Reload to retry.\n\nError code: ${code}` });
   });
+  if (!consoleWindow) {
+    beginLogin(entry, 'Connecting…');
+    const cover = entry.cover;
+    if (activate && !background && cover) cover.window.once('ready-to-show', () => {
+      if (entry.cover !== cover || cover.window.isDestroyed()) return;
+      cover.window.show(); cover.window.focus();
+    });
+  }
   void win.loadURL(`${device.origin}/`).catch(() => {});
   return entry;
 }
@@ -437,18 +521,25 @@ function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
   const entry = showDevice(device);
-  setDeviceOptions(entry, !entry.options);
+  setDeviceOptions(entry, entry.cover ? true : !entry.options);
 }
-/** @param {Entry} entry @param {boolean} enabled */
-function setDeviceOptions(entry, enabled) {
+/** @param {Entry} entry @param {boolean} enabled @param {boolean} [manual] */
+function setDeviceOptions(entry, enabled, manual = true) {
+  if (manual) {
+    entry.manualLogin = enabled && !entry.pageReady;
+    if (enabled) entry.revealMinimized = false;
+    if (!enabled && entry.device.encryptedPassword && (!entry.pageReady || entry.needsLogin)) ensureCover(entry);
+    else { dismissCover(entry); if (!entry.background) entry.window.show(); }
+  }
   const win = entry.window;
   releaseInput(entry);
+  if (enabled && !entry.options) entry.cleanBounds = win.getBounds();
   entry.options = enabled;
   entry.chrome = null;
   win.webContents.setIgnoreMenuShortcuts(false);
   win.setAspectRatio(0);
   if (entry.options) {
-    entry.cleanBounds = win.getBounds();
+    entry.cleanBounds ||= win.getBounds();
     win.setMinimumSize(720, 500);
     if (!win.isFullScreen()) {
       const work = screen.getDisplayMatching(win.getBounds()).workArea;
@@ -566,9 +657,12 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
         entry.device = updated;
         const clean = windows.get(updated.id) === entry;
         if (clean && passwordChanged && !updated.encryptedPassword) {
-          if (entry.loginTimer) clearTimeout(entry.loginTimer);
-          entry.loginTimer = null;
-          entry.loginStatus = '';
+          if (entry.needsLogin) {
+            if (entry.loginTimer) clearTimeout(entry.loginTimer);
+            entry.loginTimer = null;
+            entry.loginStatus = '';
+            setDeviceOptions(entry, true);
+          }
           const helper = consoles.get(updated.id);
           if (helper?.background) helper.window.close();
         }
@@ -670,11 +764,27 @@ ipcMain.on('glkvm:audio-startup-status', (event, value) => {
   sendSettingsAudio();
 });
 ipcMain.on('glkvm:ready', event => { const entry = deviceSender(event); if (entry) sendMode(entry); });
+ipcMain.on('glkvm:viewer-page-ready', event => {
+  const entry = deviceSender(event);
+  if (!entry || !isViewer(entry)) return;
+  entry.pageReady = true;
+  entry.needsLogin = false;
+  revealDevice(entry);
+});
 ipcMain.on('glkvm:login-required', event => {
   const entry = deviceSender(event);
-  if (!entry || windows.get(entry.device.id) !== entry || entry.needsLogin) return;
+  if (!entry || windows.get(entry.device.id) !== entry || (entry.needsLogin && entry.device.encryptedPassword)) return;
   entry.needsLogin = true;
-  if (!entry.device.encryptedPassword) return;
+  if (!entry.device.encryptedPassword) {
+    if (entry.loginTimer) clearTimeout(entry.loginTimer);
+    entry.loginTimer = null;
+    const focused = BrowserWindow.getFocusedWindow();
+    const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
+    dismissCover(entry); entry.loginStatus = ''; sendMode(entry);
+    if (!entry.window.isMinimized()) showViewer(entry, !!active, focused);
+    return;
+  }
+  entry.pageReady = false;
   beginLogin(entry);
   const consoleEntry = showDevice(entry.device, true, true);
   consoleEntry.window.webContents.send('glkvm:check-auth');
@@ -720,9 +830,7 @@ ipcMain.on('glkvm:stream-state', (event, streaming) => {
   entry.streaming = streaming === true;
   if (entry.streaming) {
     entry.needsLogin = false;
-    if (entry.loginTimer) clearTimeout(entry.loginTimer);
-    entry.loginTimer = null;
-    if (entry.loginStatus) { entry.loginStatus = ''; sendMode(entry); }
+    revealDevice(entry);
   }
 });
 ipcMain.on('glkvm:options-chrome', (event, chrome) => {
@@ -762,6 +870,17 @@ ipcMain.on('glkvm:video-size', (event, size) => {
   win.setContentSize(width, Math.round(width / ratio));
 });
 
+app.on('did-become-active', () => {
+  if (app.isHidden()) return;
+  for (const entry of windows.values()) {
+    if (!entry.cover) {
+      if (entry.needsLogin && !entry.device.encryptedPassword && !entry.background && !entry.window.isVisible() && !entry.window.isMinimized()) showViewer(entry, !BrowserWindow.getFocusedWindow());
+      continue;
+    }
+    revealDevice(entry);
+    if (entry.cover && !entry.background && !entry.revealMinimized) entry.cover.window.showInactive();
+  }
+});
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
 app.on('will-quit', () => { catalogWatcher.stop(); if (app.isReady()) globalShortcut.unregisterAll(); });
@@ -777,8 +896,10 @@ app.on('certificate-error', (event, contents, url, error, certificate, callback)
   if (!hash) { callback(false); return; }
   const key = `${hostname}:${hash}`;
   if (!certificatePrompts.has(key)) {
-    entry.window.show();
-    const prompt = dialog.showMessageBox(entry.window, {
+    const viewer = windows.get(entry.device.id);
+    const promptWindow = entry.cover?.window || viewer?.cover?.window || viewer?.window || entry.window;
+    promptWindow.show();
+    const prompt = dialog.showMessageBox(promptWindow, {
       type: 'warning', title: `Certificate for ${entry.device.name}`,
       message: `Trust this certificate for ${entry.device.name}?`,
       detail: `${hostname}\n\nThe device certificate could not be verified (${error}). Only continue if this is your GLKVM on your trusted private network.\n\nSubject: ${certificate.subjectName}\nSHA-256: ${hash}\n\nTrust applies only to this host and this exact certificate, inside GLKVM Clean. A changed certificate requires a new decision.`,
@@ -797,12 +918,15 @@ app.on('certificate-error', (event, contents, url, error, certificate, callback)
 
 function openStartupDevices() {
   const startup = config.devices.filter(device => device.openAtStartup);
-  startup.forEach(device => showDevice(device));
+  startup.forEach(device => showDevice(device, false, false, false));
   if (!startup.length) showSettings();
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (windows.size) windows.values().next().value?.window.focus(); else openStartupDevices(); });
+  app.on('second-instance', () => {
+    const entry = windows.values().next().value;
+    if (entry) showDevice(entry.device); else openStartupDevices();
+  });
   app.whenReady().then(async () => {
     // Refresh the running app's Dock icon independently of Launch Services caches.
     app.dock?.setIcon(path.join(__dirname, '../assets/icon.png'));

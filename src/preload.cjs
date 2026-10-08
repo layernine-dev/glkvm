@@ -30,7 +30,34 @@ let titleLabel;
 let releasing = false;
 let lastStreaming = false;
 let loginReported = false;
+let pageReported = false;
 let loginStatus = '';
+/** @type {string | null} */
+let checkedToken = null;
+/** @type {string | null} */
+let authenticatedToken = null;
+function hasAuthenticatedRoute() {
+  if (!['', '#/', '#/kvm'].includes(location.hash.split('?')[0])) return false;
+  try {
+    const token = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}').glkvm;
+    if (typeof token !== 'string' || !token) return false;
+    if (token !== checkedToken) {
+      checkedToken = token;
+      // A stored token can outlive its server session. Check it once per login
+      // state; a live player already proves readiness without this request.
+      void fetch('/api/auth/check', {
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+        headers: { token }, signal: AbortSignal.timeout(5000),
+      }).then(async response => {
+        if (response.ok && (await response.json()).ok === true && checkedToken === token) {
+          authenticatedToken = token;
+          update();
+        }
+      }).catch(() => {});
+    }
+    return token === authenticatedToken;
+  } catch { return false; }
+}
 const pressedKeys = new Map();
 const pressedButtons = new Set();
 /** @type {import('./keyboard.cjs').KeyboardSettings | undefined} */
@@ -261,6 +288,13 @@ function update() {
   }
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
+  else { pageReported = false; checkedToken = null; authenticatedToken = null; }
+  // An empty player can mount before the router mounts its password form.
+  // Require a live player or a server-confirmed session on a console route.
+  if (!pageReported && !signingIn && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box') && (ready || hasAuthenticatedRoute())) {
+    pageReported = true;
+    ipcRenderer.send('glkvm:viewer-page-ready');
+  }
   const streaming = hasShownVideo && ready;
   if (lastStreaming !== streaming) {
     if (!streaming) releaseInput();
