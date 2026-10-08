@@ -6,10 +6,10 @@ const { devices } = require('./devices.cjs');
 const { defaultAudio, validateAudio } = require('./audio.cjs');
 
 /** @typedef {{id: string, name: string, origin: string, openAtStartup: boolean, startMode?: string, windowScale?: number | null, encryptedPassword?: string, audio?: import('./audio.cjs').AudioSettings}} Device */
-/** @typedef {{version: number, devices: Device[], controlEnabled: boolean, muted: boolean, keyboard?: ReturnType<typeof defaultKeyboard>}} Config */
+/** @typedef {{version: number, devices: Device[], controlEnabled: boolean, muted: boolean, experimentalPauseBackgroundVideo?: boolean, keyboard?: ReturnType<typeof defaultKeyboard>}} Config */
 /** @returns {Config} */
 function defaults() {
-  return { keyboard: defaultKeyboard(), version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true, startMode: 'window-decoration-less', windowScale: null, audio: defaultAudio() })), controlEnabled: true, muted: true };
+  return { keyboard: defaultKeyboard(), version: 1, devices: devices.map(device => ({ ...device, openAtStartup: true, startMode: 'window-decoration-less', windowScale: null, audio: defaultAudio() })), controlEnabled: true, muted: true, experimentalPauseBackgroundVideo: false };
 }
 
 /** @param {unknown} value @returns {Config} */
@@ -19,6 +19,7 @@ function validateConfig(value) {
   if (input.version !== 1) throw new Error('This settings version is not supported.');
   if (!Array.isArray(input.devices) || input.devices.length > 32) throw new Error('Add up to 32 connections.');
   if (typeof input.controlEnabled !== 'boolean' || typeof input.muted !== 'boolean') throw new Error('Invalid control or audio setting.');
+  if (input.experimentalPauseBackgroundVideo !== undefined && typeof input.experimentalPauseBackgroundVideo !== 'boolean') throw new Error('Invalid experimental video setting.');
   const ids = new Set();
   const origins = new Set();
   const normalized = input.devices.map(device => {
@@ -39,7 +40,7 @@ function validateConfig(value) {
     if (device.encryptedPassword !== undefined && (typeof device.encryptedPassword !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(device.encryptedPassword) || device.encryptedPassword.length > 32768)) throw new Error('Invalid encrypted password.');
     return { ...(device.encryptedPassword ? { encryptedPassword: device.encryptedPassword } : {}), id, name: device.name.trim(), origin: url.origin, startMode, windowScale, openAtStartup: device.openAtStartup, audio: validateAudio(device.audio) };
   });
-  return { keyboard: validateKeyboard(input.keyboard), version: 1, devices: normalized, controlEnabled: input.controlEnabled, muted: input.muted };
+  return { keyboard: validateKeyboard(input.keyboard), version: 1, devices: normalized, controlEnabled: input.controlEnabled, muted: input.muted, experimentalPauseBackgroundVideo: input.experimentalPauseBackgroundVideo === true };
 }
 
 /** @param {string} file */

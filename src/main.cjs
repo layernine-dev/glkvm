@@ -49,7 +49,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
+  entry.window.webContents.send('glkvm:mode', { pauseBackgroundVideo: config.experimentalPauseBackgroundVideo === true && isViewer(entry) && !isForeground(entry), controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
 }
 /** @param {Entry} entry @param {string} [status] */
 function beginLogin(entry, status = 'Signing in…') {
@@ -362,7 +362,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   applyMute(entry);
   win.on('closed', () => { if (entry.loginTimer) clearTimeout(entry.loginTimer); if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer); collection.delete(device.id); installMenu(); updateCatalog(); syncAudio(); });
   // Audio profiles follow native window focus and visibility, not player focus.
-  if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => syncAudio());
+  if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => { syncAudio(); win.webContents.send('glkvm:background-video', config.experimentalPauseBackgroundVideo === true && !isForeground(entry)); });
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
   win.on('blur', () => { if (!consoleWindow) releaseInput(entry); });
   win.on('resized', installMenu);
