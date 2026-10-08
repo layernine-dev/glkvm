@@ -762,9 +762,15 @@ ipcMain.on('glkvm:viewer-page-ready', event => {
 });
 ipcMain.on('glkvm:login-required', event => {
   const entry = deviceSender(event);
-  if (!entry || windows.get(entry.device.id) !== entry || entry.needsLogin) return;
+  if (!entry || windows.get(entry.device.id) !== entry || (entry.needsLogin && entry.device.encryptedPassword)) return;
   entry.needsLogin = true;
-  if (!entry.device.encryptedPassword) { dismissCover(entry); entry.loginStatus = ''; sendMode(entry); if (!entry.background) entry.window.show(); return; }
+  if (!entry.device.encryptedPassword) {
+    if (entry.loginTimer) clearTimeout(entry.loginTimer);
+    entry.loginTimer = null;
+    dismissCover(entry); entry.loginStatus = ''; sendMode(entry);
+    if (!entry.background && !app.isHidden()) entry.window.show();
+    return;
+  }
   entry.pageReady = false;
   beginLogin(entry);
   const consoleEntry = showDevice(entry.device, true, true);
@@ -854,7 +860,10 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 app.on('did-become-active', () => {
   if (app.isHidden()) return;
   for (const entry of windows.values()) {
-    if (!entry.cover) continue;
+    if (!entry.cover) {
+      if (entry.needsLogin && !entry.device.encryptedPassword && !entry.background && !entry.window.isVisible() && !entry.window.isMinimized()) entry.window.showInactive();
+      continue;
+    }
     revealDevice(entry);
     if (entry.cover && !entry.background && !entry.revealMinimized) entry.cover.window.showInactive();
   }

@@ -15,6 +15,10 @@ const failureServer = createServer((request, response) => {
   if (request.headers.host?.startsWith('localhost:')) { response.destroy(); return; }
   response.setHeader('content-type', 'text/html'); response.end(fixture);
 });
+let manualDelay = 0;
+const manualServer = createServer((_request, response) => {
+  setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, manualDelay);
+});
 let unavailable = false;
 let responseDelay = 1500;
 const server = createServer((_request, response) => {
@@ -42,11 +46,15 @@ server.listen(0, '127.0.0.1', async () => {
     await new Promise(resolve => failureServer.listen(0, '127.0.0.1', () => resolve(null)));
     const failureAddress = failureServer.address();
     assert.ok(failureAddress && typeof failureAddress !== 'string');
+    await new Promise(resolve => manualServer.listen(0, '127.0.0.1', () => resolve(null)));
+    const manualAddress = manualServer.address();
+    assert.ok(manualAddress && typeof manualAddress !== 'string');
     const config = defaults();
     config.devices = ['clean', 'options'].map(id => ({ id, name: id, origin: `http://${id === 'options' ? 'localhost' : '127.0.0.1'}:${address.port}`, openAtStartup: true, startMode: id === 'options' ? 'options-enabled' : 'window-decoration-less' }));
     config.devices.push({ id: 'failed', name: 'failed', origin: `http://127.0.0.1:${failureAddress.port}`, openAtStartup: true, startMode: 'options-enabled' });
     config.devices.push({ id: 'offline', name: 'offline', origin: `http://localhost:${failureAddress.port}`, openAtStartup: true });
-    const saved = await prepareConfig({ ...config, devices: config.devices.map(device => ({ ...device, password: device.id === 'failed' ? 'incorrect-fixture-secret' : 'fixture-secret' })) }, config, safeStorage);
+    config.devices.push({ id: 'manual', name: 'manual', origin: `http://127.0.0.1:${manualAddress.port}`, openAtStartup: false, startMode: 'options-enabled' });
+    const saved = await prepareConfig({ ...config, devices: config.devices.map(device => ({ ...device, password: device.id === 'manual' ? undefined : device.id === 'failed' ? 'incorrect-fixture-secret' : 'fixture-secret' })) }, config, safeStorage);
     fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(saved));
     require('../src/main.cjs');
     await waitFor(() => BrowserWindow.getAllWindows().filter(window => ['clean', 'options'].includes(window.getTitle())).length === 2);
@@ -89,6 +97,14 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(window.isVisible(), true, 'Show the authenticated device window');
       assert.equal(window.webContents.isLoading(), false, 'Reveal only after the authenticated page finishes loading');
     }
+    Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Open manual')?.click();
+    await waitFor(() => BrowserWindow.getAllWindows().some(window => window.getTitle() === 'manual'));
+    const manual = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'manual');
+    assert.ok(manual);
+    await waitFor(() => manual.isVisible() && !coverFor(manual));
+    manualDelay = 60000;
+    manual.webContents.reload();
+    await waitFor(() => coverFor(manual));
     const reloading = viewers.find(window => window.getTitle() === 'clean');
     assert.ok(reloading);
     app.focus({ steal: true }); reloading.focus();
@@ -159,6 +175,19 @@ server.listen(0, '127.0.0.1', async () => {
     responseDelay = 1500;
     reloading.webContents.reload();
     await waitFor(() => reloading.isVisible() && !coverFor(reloading));
+    const manualCover = coverFor(manual);
+    assert.ok(manualCover);
+    await waitFor(() => manualCover.webContents.executeJavaScript("document.querySelector('#status').textContent.includes('did not complete.') && !document.body.classList.contains('busy')"));
+    manualDelay = 0;
+    app.hide();
+    await waitFor(() => app.isHidden());
+    manual.webContents.reload();
+    await waitFor(() => !manual.webContents.isLoading() && !coverFor(manual));
+    assert.equal(app.isHidden(), true, 'Manual login also honors app hiding');
+    assert.equal(manual.isVisible(), false);
+    app.show(); app.focus({ steal: true });
+    await waitFor(() => manual.isVisible());
+    assert.equal(await manual.webContents.executeJavaScript("document.querySelector('input[type=password]').getBoundingClientRect().width > 0"), true, 'Reload returns to usable manual login without saved credentials');
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
     assert.ok(failed);
     const errorWindow = coverFor(failed);
@@ -215,6 +244,6 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => failed.isDestroyed() && failedHelper.isDestroyed());
 
     console.log('PASS: local startup progress in both start modes, hidden vendor login, unchanged progress window through session reload, authenticated reveal, bounded failure and manual login');
-    failureServer.close(); server.close(); app.exit(0);
-  } catch (error) { console.error(error); failureServer.close(); server.close(); app.exit(1); }
+    failureServer.close(); manualServer.close(); server.close(); app.exit(0);
+  } catch (error) { console.error(error); failureServer.close(); manualServer.close(); server.close(); app.exit(1); }
 });
