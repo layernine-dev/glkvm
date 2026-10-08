@@ -15,7 +15,9 @@ const failureServer = createServer((request, response) => {
   if (request.headers.host?.startsWith('localhost:')) { response.destroy(); return; }
   response.setHeader('content-type', 'text/html'); response.end(fixture);
 });
+let unavailable = false;
 const server = createServer((_request, response) => {
+  if (unavailable) { response.destroy(); return; }
   setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, 1500);
 });
 /** @param {() => unknown | Promise<unknown>} condition */
@@ -104,6 +106,16 @@ server.listen(0, '127.0.0.1', async () => {
     await returning.webContents.executeJavaScript("document.querySelector('#login').remove()");
     await waitFor(() => readyReported);
     assert.equal(await returning.webContents.executeJavaScript("document.querySelector('#stream-video') === null"), true, 'Returning authentication completes without a live video');
+    unavailable = true;
+    reloading.webContents.reload();
+    await waitFor(() => !reloading.webContents.isLoading() && coverFor(reloading)?.isVisible());
+    const failedReload = coverFor(reloading);
+    assert.ok(failedReload);
+    await waitFor(() => failedReload.webContents.executeJavaScript("document.querySelector('#status').textContent.startsWith('Could not connect')"));
+    assert.equal(reloading.isVisible(), false, 'A failed reload keeps the stale device page concealed');
+    unavailable = false;
+    reloading.webContents.reload();
+    await waitFor(() => reloading.isVisible() && !coverFor(reloading));
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
     assert.ok(failed);
     const errorWindow = coverFor(failed);

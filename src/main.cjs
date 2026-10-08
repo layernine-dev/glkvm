@@ -430,6 +430,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!isDeviceURL(url, entry.device)) event.preventDefault(); });
+  let navigationFailed = false;
   if (!consoleWindow) {
     // A reload or sign-in replaces the page: mute until the new page confirms its speaker,
     // and ignore late reports from the old page. Same-document changes keep the page.
@@ -437,6 +438,7 @@ function showDevice(device, consoleWindow = false, background = false) {
     let leaving = null;
     win.webContents.on('did-start-navigation', details => {
       if (!details.isMainFrame || details.isSameDocument) return;
+      navigationFailed = false;
       leaving ||= { ready: entry.audio.ready, pageReady: entry.pageReady, pageLoaded: entry.pageLoaded };
       entry.audio.ready = false;
       entry.audio.status = null;
@@ -451,7 +453,7 @@ function showDevice(device, consoleWindow = false, background = false) {
     win.webContents.on('did-stop-loading', () => {
       const previous = leaving;
       leaving = null;
-      if (!previous || win.isDestroyed()) return;
+      if (!previous || navigationFailed || win.isDestroyed()) return;
       entry.pageReady = previous.pageReady;
       entry.pageLoaded = previous.pageLoaded;
       entry.audio.ready = previous.ready;
@@ -476,6 +478,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   win.once('ready-to-show', () => { if (!entry.background && (consoleWindow || entry.manualLogin || (entry.pageLoaded && entry.pageReady && !entry.needsLogin))) win.show(); });
   win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed()) return;
+    navigationFailed = true;
     if (!consoleWindow) {
       if (entry.loginTimer) clearTimeout(entry.loginTimer);
       entry.loginTimer = null;
