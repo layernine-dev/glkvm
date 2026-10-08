@@ -131,7 +131,11 @@ function handleKeyboardShortcut(event) {
   }
   if (consumedKeys.has(code)) {
     if (event.type === 'keyup') consumedKeys.delete(code);
-    return true;
+    // Native shortcut handlers can drop the release before it reaches us.
+    // A fresh press starts a new gesture; only repeats stay consumed.
+    else if (event.type === 'keydown' && !event.repeat) consumedKeys.delete(code);
+    else return true;
+    if (event.type !== 'keydown') return true;
   }
   // A Command release is not a remote Windows-key tap. macOS can consume the
   // shortcut key entirely, so it may never appear in this renderer.
@@ -266,6 +270,14 @@ for (const name of [
     const pause = isPauseShortcut(event);
     if (pause) pauseKeys.add(/** @type {KeyboardEvent} */ (event).code);
     const playerMouse = event instanceof MouseEvent && !!player && event.target instanceof Node && player.contains(event.target);
+    if (event instanceof MouseEvent && name === 'mouseup' && pressedButtons.has(event.button) && !playerMouse) {
+      pressedButtons.delete(event.button);
+      releasing = true;
+      try {
+        (player?.querySelector('#video-wrapper') || player)?.dispatchEvent(new MouseEvent('mouseup', { button: event.button, bubbles: true }));
+      } finally { releasing = false; }
+      return;
+    }
     if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent) && !playerMouse) {
       if (pause) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
