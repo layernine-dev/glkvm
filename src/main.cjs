@@ -771,9 +771,10 @@ ipcMain.on('glkvm:login-required', event => {
   if (!entry.device.encryptedPassword) {
     if (entry.loginTimer) clearTimeout(entry.loginTimer);
     entry.loginTimer = null;
-    const active = app.isActive();
+    const focused = BrowserWindow.getFocusedWindow();
+    const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
     dismissCover(entry); entry.loginStatus = ''; sendMode(entry);
-    if (!entry.window.isMinimized()) showViewer(entry, active);
+    if (!entry.window.isMinimized()) showViewer(entry, !!active, focused);
     return;
   }
   entry.pageReady = false;

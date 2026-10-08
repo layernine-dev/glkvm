@@ -123,11 +123,15 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(window.isVisible(), true, 'Show the authenticated device window');
       assert.equal(window.webContents.isLoading(), false, 'Reveal only after the authenticated page finishes loading');
     }
+    await waitFor(() => early.isFocusable());
+    early.focus();
+    await waitFor(() => early.isFocused());
     Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Open manual')?.click();
     await waitFor(() => BrowserWindow.getAllWindows().some(window => window.getTitle() === 'manual'));
     const manual = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'manual');
     assert.ok(manual);
     await waitFor(() => manual.isVisible() && !coverFor(manual));
+    assert.equal(early.isFocused(), true, 'Passwordless login preserves the focused connection');
     manualDelay = 60000;
     manual.webContents.reload();
     await waitFor(() => coverFor(manual));
