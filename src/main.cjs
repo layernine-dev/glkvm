@@ -50,7 +50,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.cover?.update(entry.loginStatus);
+  entry.cover?.update(entry.loginStatus, entry.device.name);
   entry.window.webContents.send('glkvm:mode', { controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
 }
 /** @param {Entry} entry */
@@ -495,7 +495,7 @@ function toggleDeviceSettings() {
 function setDeviceOptions(entry, enabled, manual = true) {
   if (manual) {
     entry.manualLogin = enabled && !entry.pageReady;
-    if (!enabled && entry.needsLogin && entry.device.encryptedPassword) ensureCover(entry);
+    if (!enabled && entry.device.encryptedPassword && (!entry.pageReady || entry.needsLogin)) ensureCover(entry);
     else { dismissCover(entry); if (!entry.background) entry.window.show(); }
   }
   const win = entry.window;

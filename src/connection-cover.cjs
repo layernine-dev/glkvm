@@ -44,8 +44,10 @@ function createCover(window, name, onAction) {
   });
   return {
     window: progress,
-    /** @param {string} text */
-    update(text) {
+    /** @param {string} text @param {string} [nextName] */
+    update(text, nextName = name) {
+      name = nextName;
+      progress.setTitle(`${name} — Connecting`);
       message = text || 'Connecting…';
       busy = ['Connecting…', 'Signing in…', 'Connecting to video…'].includes(message);
       send();

@@ -49,6 +49,16 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => BrowserWindow.getAllWindows().filter(window => ['clean', 'options'].includes(window.getTitle())).length === 2);
     const viewers = BrowserWindow.getAllWindows().filter(window => ['clean', 'options'].includes(window.getTitle()));
     await waitFor(() => viewers.every(window => coverFor(window)));
+    const early = viewers.find(window => window.getTitle() === 'clean');
+    assert.ok(early);
+    const earlyCover = coverFor(early);
+    assert.ok(earlyCover);
+    await waitFor(() => !earlyCover.webContents.isLoading() && earlyCover.isVisible());
+    assert.equal(early.webContents.isLoading(), true, 'Device is still loading before its password DOM can report');
+    await earlyCover.webContents.executeJavaScript("document.querySelector('[data-action=manual]').click()");
+    await waitFor(() => early.isVisible() && earlyCover.isDestroyed());
+    Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Device Settings…')?.click();
+    await waitFor(() => !early.isVisible() && coverFor(early));
     const covers = viewers.map(window => coverFor(window));
     for (const [index, window] of viewers.entries()) {
       const cover = covers[index];
@@ -128,11 +138,14 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(settings);
     assert.equal(await settings.webContents.executeJavaScript(`(async () => {
       const value = await window.settings.load();
-      value.devices.find(device => device.id === 'offline').removePassword = true;
+      const offline = value.devices.find(device => device.id === 'offline');
+      offline.removePassword = true; offline.name = 'Renamed offline';
       return (await window.settings.save(value)).ok;
     })()`), true);
     assert.equal(coverFor(offline), offlineCover, 'Removing a password preserves network failure feedback');
     assert.equal(offlineCover.isVisible(), true);
+    assert.equal(offlineCover.getTitle(), 'Renamed offline — Connecting');
+    await waitFor(() => offlineCover.webContents.executeJavaScript("document.querySelector('#name').textContent === 'Renamed offline'"));
     assert.equal(offline.isVisible(), false);
 
     console.log('PASS: local startup progress in both start modes, hidden vendor login, unchanged progress window through session reload, authenticated reveal, bounded failure and manual login');
