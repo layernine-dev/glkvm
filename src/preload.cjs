@@ -81,6 +81,11 @@ const heldModifiers = new Map();
 const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste', 'pauseAudioSwitching']);
 /** @type {Record<string, 'meta' | 'control' | 'alt' | 'shift'>} */
 const modifierNames = { MetaLeft: 'meta', MetaRight: 'meta', ControlLeft: 'control', ControlRight: 'control', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
+function consumeModifiers() {
+  for (const code of pendingModifiers.keys()) consumedKeys.add(code);
+  pendingModifiers.clear();
+}
+ipcRenderer.on('glkvm:local-shortcut', consumeModifiers);
 function flushModifiers() {
   if (!player) return;
   for (const [code, key] of heldModifiers) {
@@ -99,8 +104,18 @@ function handleKeyboardShortcut(event) {
   if (!event.isTrusted || !keyboard || !playerFocused()) return false;
   const code = event.code;
   const modifier = modifierNames[code];
-  // Command+Tab belongs to macOS, including when Command was already forwarded.
-  if (event.metaKey && code === 'Tab') { releaseInput(); return true; }
+  // These combinations belong to macOS or the app. Native handlers may consume
+  // their keydown, but a renderer keyup must not replay the pending modifiers.
+  const localCommand = event.metaKey && !event.ctrlKey && !event.altKey && (
+    ['Tab', 'KeyQ', 'KeyW', 'KeyR', 'Comma', 'KeyH', 'KeyM'].includes(code)
+    || /^Digit[1-9]$/.test(code) || (event.shiftKey && ['KeyO', 'KeyC'].includes(code))
+  );
+  if (localCommand) {
+    consumeModifiers();
+    if (event.type === 'keydown') consumedKeys.add(code);
+    if (event.type === 'keyup') consumedKeys.delete(code);
+    return true;
+  }
   if (modifier && event.type === 'keydown') heldModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
   if (modifier && event.type === 'keyup') heldModifiers.delete(code);
   const action = keyboardActions.find(name => {
@@ -118,11 +133,18 @@ function handleKeyboardShortcut(event) {
     if (event.type === 'keyup') consumedKeys.delete(code);
     return true;
   }
-  if (event.type === 'keydown' && modifier && !pressedKeys.has(code) && !pressedButtons.size && (modifier === 'meta' || keyboardActions.some(name => keyboard?.[name]?.[modifier]))) {
+  // A Command release is not a remote Windows-key tap. macOS can consume the
+  // shortcut key entirely, so it may never appear in this renderer.
+  if (event.type === 'keyup' && pendingModifiers.has(code) && (modifier === 'meta' || event.metaKey)) {
+    if (modifier === 'meta') { consumeModifiers(); consumedKeys.delete(code); }
+    else pendingModifiers.delete(code);
+    return true;
+  }
+  if (event.type === 'keydown' && modifier && !pressedKeys.has(code) && (modifier === 'meta' || event.metaKey || (!pressedButtons.size && keyboardActions.some(name => keyboard?.[name]?.[modifier])))) {
     pendingModifiers.set(code, { code, key: event.key, location: event.location, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey });
     return true;
   }
-  // A normal chord, or a modifier tapped alone, retains the vendor's input behavior.
+  // Remote chords and non-Command modifier taps retain the vendor's input behavior.
   if (event.type === 'keydown' || event.type === 'keyup') flushModifiers();
   return false;
 }

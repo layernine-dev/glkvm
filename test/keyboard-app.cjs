@@ -99,8 +99,31 @@ server.listen(0, '127.0.0.1', async () => {
     await win.webContents.executeJavaScript('window.keyLog = []');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Meta', modifiers: ['meta'] });
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
-    await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length === 2'));
-    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'MetaLeft'], ['keyup', 'MetaLeft']], 'An intentional Command tap is preserved');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'Command alone never becomes a remote Windows-key tap, including when macOS consumes the shortcut key');
+    for (const keyCode of ['Shift', 'Control', 'Alt']) {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Meta', modifiers: ['meta'] });
+      const modifier = /** @type {'shift' | 'control' | 'alt'} */ (keyCode.toLowerCase());
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers: ['meta', modifier] });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers: ['meta'] });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
+    }
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'Modifier transitions around a consumed macOS shortcut never flush Command');
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Meta', modifiers: ['meta'] });
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab', modifiers: ['meta'] });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab', modifiers: ['meta'] });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'Command+Tab forwards neither Command nor Tab');
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Meta', modifiers: ['meta'] });
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Shift', modifiers: ['meta', 'shift'] });
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'C', modifiers: ['meta', 'shift'] });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'C', modifiers: ['meta', 'shift'] });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Shift', modifiers: ['meta'] });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Meta' });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'The local Center shortcut never becomes a remote Command tap');
     await win.webContents.executeJavaScript("document.querySelector('#stream-box').dispatchEvent(new KeyboardEvent('keydown', {key:'v',code:'KeyV',metaKey:true,bubbles:true}));");
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(pastes.length, 1, 'Page-generated events cannot read the local clipboard');
@@ -252,7 +275,7 @@ server.listen(0, '127.0.0.1', async () => {
     press('V', ['meta']);
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(pastes.length, 1);
-    console.log('PASS: options-enabled startup, Insert, Ctrl+Alt+Delete, text paste, local-field isolation, disconnected stream gate, pause audio switching shortcut (migrated default, one toggle per press, no remote keys, local field, no stale modifiers after a local-field release, live move mode and view-only, Settings and its recorder)');
+    console.log('PASS: no remote Command tap, Command+Tab or Center shortcut keys, modifier-only transitions, ordinary remote chords, options-enabled startup, Insert, Ctrl+Alt+Delete, text paste, local-field isolation, disconnected stream gate, pause audio switching shortcut (migrated default, one toggle per press, no remote keys, local field, no stale modifiers after a local-field release, live move mode and view-only, Settings and its recorder)');
     clipboard.readText = originalRead; server.close(); app.exit(0);
   } catch (error) { console.error(error); const failedWindow = BrowserWindow.getAllWindows().find(w => w.getTitle() === 'Keyboard Fixture'); if (failedWindow) console.error('Keyboard fixture state:', failedWindow.isFocused(), await failedWindow.webContents.executeJavaScript('({active:document.activeElement.id,log:window.keyLog})')); clipboard.readText = originalRead; server.close(); app.exit(1); }
 });
