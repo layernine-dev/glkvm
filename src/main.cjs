@@ -108,7 +108,10 @@ function updateModeShortcuts() {
   }
   for (const accelerator of wanted.keys()) {
     if (registeredShortcuts.has(accelerator)) continue;
-    if (globalShortcut.register(accelerator, () => appShortcuts().get(accelerator)?.())) registeredShortcuts.add(accelerator);
+    if (globalShortcut.register(accelerator, () => {
+      BrowserWindow.getFocusedWindow()?.webContents.send('glkvm:local-shortcut');
+      appShortcuts().get(accelerator)?.();
+    })) registeredShortcuts.add(accelerator);
   }
 }
 /** The audio switching shortcut works in every app window and mode. A connection page consumes
@@ -136,8 +139,15 @@ function handleAppShortcuts(contents, pageConsumes = false) {
     const key = input.key.toUpperCase();
     const accelerator = `CommandOrControl+${input.shift ? 'Shift+' : ''}${key}`;
     const action = appShortcuts().get(accelerator);
+    // Menu shortcuts may consume the key before the renderer sees it.
+    const menuCommand = input.shift ? ['C', 'M'].includes(key) : [',', 'H', 'M', 'R', 'Q', 'W'].includes(key);
+    if (pageConsumes && input.type === 'keyDown' && (action || menuCommand)) {
+      contents.send('glkvm:local-shortcut');
+      dropped.add(input.code);
+    }
     if (!action) return;
     event.preventDefault();
+    if (input.type === 'keyDown') dropped.add(input.code);
     if (input.type === 'keyDown' && !input.isAutoRepeat) action();
   });
 }
