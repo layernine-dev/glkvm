@@ -50,7 +50,7 @@ server.listen(0, '127.0.0.1', async () => {
       const cover = covers[index];
       assert.ok(cover, 'Local progress exists before the device page loads');
       assert.equal(window.isVisible(), false, 'Never show the device login page');
-      window.webContents.on('did-start-navigation', details => {
+      window.webContents.once('did-start-navigation', details => {
         if (!details.isMainFrame || details.isSameDocument) return;
         assert.equal(coverFor(window), cover, 'The same progress window survives the authenticated reload');
         assert.equal(window.isVisible(), false, 'Reload stays hidden');
@@ -69,6 +69,10 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(window.isVisible(), true, 'Show the authenticated device window');
       assert.equal(window.webContents.isLoading(), false, 'Reveal only after the authenticated page finishes loading');
     }
+    const reloading = viewers[0];
+    reloading.webContents.reload();
+    await waitFor(() => !reloading.isVisible() && coverFor(reloading));
+    await waitFor(() => reloading.isVisible() && !coverFor(reloading));
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
     assert.ok(failed);
     const errorWindow = coverFor(failed);

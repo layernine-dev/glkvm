@@ -22,7 +22,7 @@ const { setupUpdates } = require('./updates.cjs');
 let updates = null;
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, cover: ReturnType<typeof createCover> | null, pageReady: boolean, pageLoaded: boolean, manualLogin: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, cover: ReturnType<typeof createCover> | null, pageReady: boolean, pageLoaded: boolean, manualLogin: boolean, revealActive: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -62,7 +62,10 @@ function dismissCover(entry) {
 /** @param {Entry} entry */
 function ensureCover(entry) {
   if (entry.manualLogin || !isViewer(entry)) return;
-  if (entry.window.isVisible()) entry.window.hide();
+  if (entry.window.isVisible()) {
+    if (!entry.cover) entry.revealActive = entry.window.isFocused();
+    entry.window.hide();
+  }
   if (entry.cover) return;
   entry.cover = createCover(entry.window, entry.device.name, action => {
     if (action === 'manual') setDeviceOptions(entry, true);
@@ -79,9 +82,12 @@ function revealDevice(entry) {
   entry.loginTimer = null;
   entry.loginStatus = '';
   entry.manualLogin = false;
+  const active = entry.revealActive || entry.cover?.window.isFocused();
   dismissCover(entry);
   sendMode(entry);
-  if (!entry.background && !entry.window.isVisible()) entry.window.show();
+  if (!entry.background && !entry.window.isVisible()) {
+    if (active) entry.window.show(); else entry.window.showInactive();
+  }
 }
 /** @param {Entry} entry @param {string} [status] */
 function beginLogin(entry, status = 'Signing in…') {
@@ -390,7 +396,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   });
   // A viewer opened while audio switching is paused uses the background profile until resumed.
   /** @type {Entry} */
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, cover: null, pageReady: false, pageLoaded: false, manualLogin: false, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, cover: null, pageReady: false, pageLoaded: false, manualLogin: false, revealActive: true, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
   updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true, false);
@@ -411,26 +417,30 @@ function showDevice(device, consoleWindow = false, background = false) {
   if (!consoleWindow) {
     // A reload or sign-in replaces the page: mute until the new page confirms its speaker,
     // and ignore late reports from the old page. Same-document changes keep the page.
-    /** @type {{ready: boolean} | null} */
+    /** @type {{ready: boolean, pageReady: boolean, pageLoaded: boolean} | null} */
     let leaving = null;
     win.webContents.on('did-start-navigation', details => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      entry.pageReady = false;
-      entry.pageLoaded = false;
-      leaving ||= { ready: entry.audio.ready };
+      leaving ||= { ready: entry.audio.ready, pageReady: entry.pageReady, pageLoaded: entry.pageLoaded };
       entry.audio.ready = false;
       entry.audio.status = null;
       applyMute(entry);
+      if (!entry.loginStatus) beginLogin(entry, 'Connecting to video…');
+      else ensureCover(entry);
+      entry.pageReady = false;
+      entry.pageLoaded = false;
     });
     win.webContents.on('did-navigate', () => { leaving = null; });
     // A navigation that never committed (blocked, aborted, no content) keeps the old page; route it again.
     win.webContents.on('did-stop-loading', () => {
       const previous = leaving;
       leaving = null;
-      if (!previous?.ready || win.isDestroyed()) return;
-      entry.audio.ready = true;
-      entry.audio.route = null;
-      syncAudio();
+      if (!previous || win.isDestroyed()) return;
+      entry.pageReady = previous.pageReady;
+      entry.pageLoaded = previous.pageLoaded;
+      entry.audio.ready = previous.ready;
+      revealDevice(entry);
+      if (previous.ready) { entry.audio.route = null; syncAudio(); }
     });
   }
   handleAppShortcuts(win.webContents, !consoleWindow);

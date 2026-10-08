@@ -38,7 +38,7 @@ function createCover(window, name, onAction) {
     if (!progress.webContents.isDestroyed()) progress.webContents.send('glkvm:cover-status', { name, message, busy });
   };
   progress.webContents.on('did-finish-load', send);
-  progress.once('ready-to-show', () => { if (!progress.isDestroyed() && !window.isDestroyed() && !window.isMinimized()) progress.show(); });
+  progress.once('ready-to-show', () => { if (!progress.isDestroyed() && !window.isDestroyed() && !window.isMinimized()) progress.showInactive(); });
   void progress.webContents.loadURL(url).catch(() => {
     if (!window.isDestroyed()) onAction('manual');
   });
