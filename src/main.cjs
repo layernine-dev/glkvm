@@ -369,7 +369,7 @@ function sendStartup(entry) {
 }
 
 /** @param {Device} device @param {boolean} [consoleWindow] @param {boolean} [background] */
-function showDevice(device, consoleWindow = false, background = false) {
+function showDevice(device, consoleWindow = false, background = false, activate = true) {
   const collection = consoleWindow ? consoles : windows;
   const existing = collection.get(device.id);
   if (existing) {
@@ -505,7 +505,14 @@ function showDevice(device, consoleWindow = false, background = false) {
     if (entry.cover || (code <= -200 && code >= -299)) return;
     void dialog.showMessageBox(win, { type: 'error', message: `Could not connect to ${device.name}`, detail: `Check the device and network connection. Use Device → Reload to retry.\n\nError code: ${code}` });
   });
-  if (!consoleWindow) beginLogin(entry, 'Connecting…');
+  if (!consoleWindow) {
+    beginLogin(entry, 'Connecting…');
+    const cover = entry.cover;
+    if (activate && !background && cover) cover.window.once('ready-to-show', () => {
+      if (entry.cover !== cover || cover.window.isDestroyed()) return;
+      cover.window.show(); cover.window.focus();
+    });
+  }
   void win.loadURL(`${device.origin}/`).catch(() => {});
   return entry;
 }
@@ -911,7 +918,7 @@ app.on('certificate-error', (event, contents, url, error, certificate, callback)
 
 function openStartupDevices() {
   const startup = config.devices.filter(device => device.openAtStartup);
-  startup.forEach(device => showDevice(device));
+  startup.forEach(device => showDevice(device, false, false, false));
   if (!startup.length) showSettings();
 }
 if (!app.requestSingleInstanceLock()) app.quit();

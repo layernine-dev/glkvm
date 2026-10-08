@@ -126,10 +126,14 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => early.isFocusable());
     early.focus();
     await waitFor(() => early.isFocused());
+    manualDelay = 600;
     Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Open manual')?.click();
     await waitFor(() => BrowserWindow.getAllWindows().some(window => window.getTitle() === 'manual'));
     const manual = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'manual');
     assert.ok(manual);
+    await waitFor(() => coverFor(manual)?.isFocused());
+    early.focus();
+    await waitFor(() => early.isFocused());
     await waitFor(() => manual.isVisible() && !coverFor(manual));
     assert.equal(early.isFocused(), true, 'Passwordless login preserves the focused connection');
     manualDelay = 60000;
