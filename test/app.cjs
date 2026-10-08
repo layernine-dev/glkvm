@@ -94,7 +94,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(login.isVisible(), false);
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
     assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);
-    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
+    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture — Connecting']);
     command('Device Settings…');
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     assert.equal(await clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-authenticating')"), false, 'Manual sign-in controls must remain accessible');

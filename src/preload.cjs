@@ -30,6 +30,7 @@ let titleLabel;
 let releasing = false;
 let lastStreaming = false;
 let loginReported = false;
+let pageReported = false;
 let loginStatus = '';
 const pressedKeys = new Map();
 const pressedButtons = new Set();
@@ -261,6 +262,10 @@ function update() {
   }
   if (signingIn && !loginReported) { loginReported = true; ipcRenderer.send('glkvm:login-required'); }
   if (!signingIn) loginReported = false;
+  if (!pageReported && !signingIn && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
+    pageReported = true;
+    ipcRenderer.send('glkvm:viewer-page-ready');
+  }
   const streaming = hasShownVideo && ready;
   if (lastStreaming !== streaming) {
     if (!streaming) releaseInput();
