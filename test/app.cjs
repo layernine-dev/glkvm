@@ -13,13 +13,6 @@ app.setPath('userData', directory);
 const pastes = [];
 let pageLoads = 0;
 const server = createServer((_req, res) => {
-  if (_req.url === '/api/auth/check') {
-    const valid = /^fixture-token-\d+$/.test(String(_req.headers.token));
-    res.statusCode = valid ? 200 : 403;
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ ok: valid }));
-    return;
-  }
   if (_req.url?.startsWith('/api/hid/print')) {
     let body = '';
     _req.on('data', chunk => { body += chunk; });
@@ -101,7 +94,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(login.isVisible(), false);
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
     assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);
-    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture — Connecting']);
+    assert.deepEqual(BrowserWindow.getAllWindows().filter(win => win.isVisible()).map(win => win.getTitle()), ['Fixture']);
     command('Device Settings…');
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     assert.equal(await clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-authenticating')"), false, 'Manual sign-in controls must remain accessible');

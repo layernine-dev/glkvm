@@ -4,10 +4,6 @@ const { ipcRenderer } = require('electron');
 window.addEventListener('DOMContentLoaded', () => {
   let reported = false;
   let attempted = false;
-  /** @type {string | null} */
-  let checkedToken = null;
-  /** @type {string | null} */
-  let authenticatedToken = null;
   const sessionToken = () => {
     try {
       const token = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}').glkvm;
@@ -42,27 +38,14 @@ window.addEventListener('DOMContentLoaded', () => {
       return;
     }
     const passwordVisible = [...document.querySelectorAll('input[type="password"]')].some(input => input.getBoundingClientRect().width > 0);
-    if (passwordVisible) { checkedToken = null; authenticatedToken = null; void fillLogin(); return; }
+    if (passwordVisible) { void fillLogin(); return; }
     // The authenticated console can have no decoded video (including canvas
     // transport or no HDMI signal). The visible page still needs a fresh load
     // to pick up the session established in this helper.
     const consoleRoute = ['', '#/', '#/kvm'].includes(location.hash.split('?')[0]);
-    if (!reported && token && consoleRoute && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
-      if (authenticatedToken === token) {
-        reported = true;
-        ipcRenderer.send('glkvm:console-authenticated');
-      } else if (checkedToken !== token) {
-        checkedToken = token;
-        void fetch('/api/auth/check', {
-          credentials: 'same-origin', redirect: 'error', cache: 'no-store',
-          headers: { token }, signal: AbortSignal.timeout(5000),
-        }).then(async response => {
-          if (response.ok && (await response.json()).ok === true && checkedToken === token) {
-            authenticatedToken = token;
-            check();
-          }
-        }).catch(() => {});
-      }
+    if (!reported && consoleRoute && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
+      reported = true;
+      ipcRenderer.send('glkvm:console-authenticated');
     }
   };
   ipcRenderer.on('glkvm:check-auth', () => { reported = false; check(); });

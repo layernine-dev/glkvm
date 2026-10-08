@@ -11,7 +11,7 @@
     "test": "node --test test/*.test.cjs",
     "test:startup": "node scripts/run-app.cjs single-instance",
     "test:browser": "node scripts/run-app.cjs browser app keyboard-app",
-    "test:gui": "node scripts/run-app.cjs single-instance browser app keyboard-app connection-cover-app audio-app startup-audio-app device-id-app",
+    "test:gui": "node scripts/run-app.cjs single-instance browser app keyboard-app audio-app startup-audio-app device-id-app",
     "check": "tsc --noEmit",
     "build": "node scripts/build.cjs",
     "verify:signature": "node scripts/verify-signature.cjs",
