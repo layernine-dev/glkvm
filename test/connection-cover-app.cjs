@@ -148,6 +148,17 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => offlineCover.webContents.executeJavaScript("document.querySelector('#name').textContent === 'Renamed offline'"));
     assert.equal(offline.isVisible(), false);
 
+    failed.focus();
+    await waitFor(() => failed.isFocused());
+    controls.click();
+    await waitFor(() => !failed.isVisible() && coverFor(failed)?.isVisible());
+    const cancelled = coverFor(failed);
+    const failedHelper = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed — Device Settings');
+    assert.ok(cancelled);
+    assert.ok(failedHelper);
+    cancelled.close();
+    await waitFor(() => failed.isDestroyed() && failedHelper.isDestroyed());
+
     console.log('PASS: local startup progress in both start modes, hidden vendor login, unchanged progress window through session reload, authenticated reveal, bounded failure and manual login');
     failureServer.close(); server.close(); app.exit(0);
   } catch (error) { console.error(error); failureServer.close(); server.close(); app.exit(1); }

@@ -409,7 +409,15 @@ function showDevice(device, consoleWindow = false, background = false) {
   updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true, false);
   applyMute(entry);
-  win.on('closed', () => { dismissCover(entry); if (entry.loginTimer) clearTimeout(entry.loginTimer); if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer); collection.delete(device.id); installMenu(); updateCatalog(); syncAudio(); });
+  win.on('closed', () => {
+    dismissCover(entry);
+    if (entry.loginTimer) clearTimeout(entry.loginTimer);
+    if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer);
+    collection.delete(device.id);
+    const helper = !consoleWindow && consoles.get(device.id);
+    if (helper && helper.background) helper.window.close();
+    installMenu(); updateCatalog(); syncAudio();
+  });
   // Audio profiles follow native window focus and visibility, not player focus.
   if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => syncAudio());
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
