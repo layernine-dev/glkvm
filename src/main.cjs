@@ -83,6 +83,7 @@ function revealDevice(entry) {
   entry.loginTimer = null;
   entry.loginStatus = '';
   entry.manualLogin = false;
+  if (app.isHidden()) return;
   const focused = BrowserWindow.getFocusedWindow();
   const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
   dismissCover(entry);
@@ -850,6 +851,14 @@ ipcMain.on('glkvm:video-size', (event, size) => {
   win.setContentSize(width, Math.round(width / ratio));
 });
 
+app.on('did-become-active', () => {
+  if (app.isHidden()) return;
+  for (const entry of windows.values()) {
+    if (!entry.cover) continue;
+    revealDevice(entry);
+    if (entry.cover && !entry.background && !entry.revealMinimized) entry.cover.window.showInactive();
+  }
+});
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
 app.on('will-quit', () => { catalogWatcher.stop(); if (app.isReady()) globalShortcut.unregisterAll(); });

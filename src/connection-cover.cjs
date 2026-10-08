@@ -1,4 +1,4 @@
-const { BrowserWindow } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const url = pathToFileURL(path.join(__dirname, 'connection-cover.html')).href;
@@ -38,7 +38,7 @@ function createCover(window, name, onAction) {
     if (!progress.webContents.isDestroyed()) progress.webContents.send('glkvm:cover-status', { name, message, busy });
   };
   progress.webContents.on('did-finish-load', send);
-  progress.once('ready-to-show', () => { if (!progress.isDestroyed() && !window.isDestroyed() && !window.isMinimized()) progress.showInactive(); });
+  progress.once('ready-to-show', () => { if (!progress.isDestroyed() && !window.isDestroyed() && !window.isMinimized() && !app.isHidden()) progress.showInactive(); });
   void progress.webContents.loadURL(url).catch(() => {
     if (!window.isDestroyed()) onAction('manual');
   });
