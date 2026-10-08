@@ -443,7 +443,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       entry.audio.ready = false;
       entry.audio.status = null;
       applyMute(entry);
-      if (!entry.loginStatus) beginLogin(entry, 'Connecting to video…');
+      if (!entry.loginTimer) beginLogin(entry, 'Connecting to video…');
       else ensureCover(entry);
       entry.pageReady = false;
       entry.pageLoaded = false;

@@ -16,13 +16,14 @@ const failureServer = createServer((request, response) => {
   response.setHeader('content-type', 'text/html'); response.end(fixture);
 });
 let unavailable = false;
+let responseDelay = 1500;
 const server = createServer((_request, response) => {
   if (unavailable) { response.destroy(); return; }
-  setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, 1500);
+  setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, responseDelay);
 });
 /** @param {() => unknown | Promise<unknown>} condition */
 async function waitFor(condition) {
-  for (let attempt = 0; attempt < 200; attempt++) {
+  for (let attempt = 0; attempt < 250; attempt++) {
     if (await condition()) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -114,6 +115,12 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => failedReload.webContents.executeJavaScript("document.querySelector('#status').textContent.startsWith('Could not connect')"));
     assert.equal(reloading.isVisible(), false, 'A failed reload keeps the stale device page concealed');
     unavailable = false;
+    responseDelay = 25000;
+    reloading.webContents.reload();
+    await waitFor(() => failedReload.webContents.executeJavaScript("document.querySelector('#status').textContent === 'Connecting to video…' && document.body.classList.contains('busy')"));
+    await waitFor(() => failedReload.webContents.executeJavaScript("document.querySelector('#status').textContent.startsWith('Connection did not complete.') && !document.body.classList.contains('busy')"));
+    assert.equal(reloading.isVisible(), false, 'A stalled retry has its own bounded failure');
+    responseDelay = 1500;
     reloading.webContents.reload();
     await waitFor(() => reloading.isVisible() && !coverFor(reloading));
     const failed = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'failed');
