@@ -10,6 +10,18 @@ const { prepareConfig } = require('../src/credentials.cjs');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-cover-'));
 app.setPath('userData', directory);
 const fixture = fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8');
+// Model a vendor SPA mounting its empty player before its login form.
+const delayedLoginFixture = fixture.replace('</body>', `<script>
+  if (localStorage.getItem('fixture-auth') !== 'true') {
+    const login = document.querySelector('#login');
+    login.remove(); location.hash = '';
+    window.fixtureWaitingForLogin = true;
+    setTimeout(() => {
+      document.body.append(login); location.hash = '/login';
+      window.fixtureWaitingForLogin = false;
+    }, 1000);
+  }
+</script></body>`);
 // Hold both the login page and authenticated reload so visibility races are observable.
 const failureServer = createServer((request, response) => {
   if (request.headers.host?.startsWith('localhost:')) { response.destroy(); return; }
@@ -23,7 +35,7 @@ let unavailable = false;
 let responseDelay = 1500;
 const server = createServer((_request, response) => {
   if (unavailable) { response.destroy(); return; }
-  setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(fixture); }, responseDelay);
+  setTimeout(() => { response.setHeader('content-type', 'text/html'); response.end(delayedLoginFixture); }, responseDelay);
 });
 /** @param {() => unknown | Promise<unknown>} condition */
 async function waitFor(condition) {
@@ -87,6 +99,8 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => covers.find(progress => progress?.getTitle() === 'clean — Connecting')?.isFocused());
     assert.equal(viewers.every(window => !window.isVisible()), true, 'Duplicate launch activates progress without exposing the viewer');
     await waitFor(() => viewers.every(window => !window.webContents.isLoading()));
+    assert.equal(await early.webContents.executeJavaScript('window.fixtureWaitingForLogin'), true, 'The player scaffold loads before the delayed login form');
+    assert.equal(early.isVisible(), false, 'An empty player scaffold is not authentication');
     assert.equal(await viewers.find(window => window.getTitle() === 'options')?.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"), true);
     for (const [index, window] of viewers.entries()) assert.equal(coverFor(window), covers[index], 'Both startup modes hide the vendor login page');
     const screenshot = covers[0];

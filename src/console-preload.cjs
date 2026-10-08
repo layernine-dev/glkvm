@@ -43,7 +43,7 @@ window.addEventListener('DOMContentLoaded', () => {
     // transport or no HDMI signal). The visible page still needs a fresh load
     // to pick up the session established in this helper.
     const consoleRoute = ['', '#/', '#/kvm'].includes(location.hash.split('?')[0]);
-    if (!reported && consoleRoute && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
+    if (!reported && token && consoleRoute && !document.querySelector('.auth-form-container') && document.querySelector('#stream-window #stream-box')) {
       reported = true;
       ipcRenderer.send('glkvm:console-authenticated');
     }

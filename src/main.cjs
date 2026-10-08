@@ -71,7 +71,6 @@ function ensureCover(entry) {
   entry.cover = createCover(entry.window, entry.device.name, action => {
     if (action === 'manual') setDeviceOptions(entry, true);
     else if (action === 'close') entry.window.close();
-    else if (action === 'minimize') entry.window.minimize();
     else if (action === 'focus') { lastDeviceId = entry.device.id; installMenu(); }
   });
   handleAppShortcuts(entry.cover.window.webContents, false);
