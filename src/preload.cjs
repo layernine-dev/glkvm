@@ -19,13 +19,28 @@ let options = false;
 let pauseBackgroundVideo = false;
 /** Only videos paused by this experiment are resumed. @type {Set<HTMLVideoElement>} */
 const backgroundPausedVideos = new Set();
+/** @type {WeakSet<HTMLVideoElement>} */
+const resumingBackgroundVideos = new WeakSet();
+/** @type {WeakSet<HTMLVideoElement>} */
+const warnedBackgroundVideos = new WeakSet();
 
 function syncBackgroundVideo() {
   for (const video of backgroundPausedVideos) {
     if (!video.isConnected) { backgroundPausedVideos.delete(video); continue; }
-    if (!pauseBackgroundVideo) {
-      backgroundPausedVideos.delete(video);
-      void video.play().catch(error => console.warn('Could not resume experimental background video:', error));
+    if (!pauseBackgroundVideo && !resumingBackgroundVideos.has(video)) {
+      resumingBackgroundVideos.add(video);
+      void video.play().then(() => {
+        if (!pauseBackgroundVideo && !video.paused) {
+          backgroundPausedVideos.delete(video);
+          warnedBackgroundVideos.delete(video);
+        }
+      }).catch(error => {
+        // Keep ownership so the next synchronization can retry a transient failure.
+        if (!warnedBackgroundVideos.has(video)) {
+          warnedBackgroundVideos.add(video);
+          console.warn('Could not resume experimental background video; retrying:', error);
+        }
+      }).finally(() => resumingBackgroundVideos.delete(video));
     }
   }
   if (!pauseBackgroundVideo) return;
