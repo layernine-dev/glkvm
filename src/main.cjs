@@ -61,8 +61,9 @@ function dismissCover(entry) {
 }
 /** @param {Entry} entry */
 function ensureCover(entry) {
-  if (entry.cover || entry.manualLogin || !isViewer(entry)) return;
+  if (entry.manualLogin || !isViewer(entry)) return;
   if (entry.window.isVisible()) entry.window.hide();
+  if (entry.cover) return;
   entry.cover = createCover(entry.window, entry.device.name, action => {
     if (action === 'manual') setDeviceOptions(entry, true);
     else if (action === 'close') entry.window.close();
@@ -470,11 +471,15 @@ function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
   const entry = showDevice(device);
-  setDeviceOptions(entry, !entry.options);
+  setDeviceOptions(entry, entry.cover ? true : !entry.options);
 }
 /** @param {Entry} entry @param {boolean} enabled @param {boolean} [manual] */
 function setDeviceOptions(entry, enabled, manual = true) {
-  if (manual) { entry.manualLogin = true; dismissCover(entry); if (!entry.background) entry.window.show(); }
+  if (manual) {
+    entry.manualLogin = enabled && !entry.pageReady;
+    if (!enabled && entry.needsLogin && entry.device.encryptedPassword) ensureCover(entry);
+    else { dismissCover(entry); if (!entry.background) entry.window.show(); }
+  }
   const win = entry.window;
   releaseInput(entry);
   entry.options = enabled;
@@ -819,8 +824,10 @@ app.on('certificate-error', (event, contents, url, error, certificate, callback)
   if (!hash) { callback(false); return; }
   const key = `${hostname}:${hash}`;
   if (!certificatePrompts.has(key)) {
-    entry.window.show();
-    const prompt = dialog.showMessageBox(entry.window, {
+    const viewer = windows.get(entry.device.id);
+    const promptWindow = entry.cover?.window || viewer?.cover?.window || viewer?.window || entry.window;
+    promptWindow.show();
+    const prompt = dialog.showMessageBox(promptWindow, {
       type: 'warning', title: `Certificate for ${entry.device.name}`,
       message: `Trust this certificate for ${entry.device.name}?`,
       detail: `${hostname}\n\nThe device certificate could not be verified (${error}). Only continue if this is your GLKVM on your trusted private network.\n\nSubject: ${certificate.subjectName}\nSHA-256: ${hash}\n\nTrust applies only to this host and this exact certificate, inside GLKVM Clean. A changed certificate requires a new decision.`,

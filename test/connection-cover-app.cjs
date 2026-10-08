@@ -1,5 +1,5 @@
 require('./runtime.cjs');
-const { app, BrowserWindow, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, safeStorage } = require('electron');
 const { createServer } = require('node:http');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -76,10 +76,22 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(failed.isVisible(), false, 'Rejected login remains concealed');
     await waitFor(() => errorWindow.webContents.executeJavaScript("document.querySelector('#status').textContent.startsWith('Sign-in did not complete.')"));
     assert.equal(await errorWindow.webContents.executeJavaScript("document.body.classList.contains('busy')"), false, 'Failure stops the animation');
-    await errorWindow.webContents.executeJavaScript("document.querySelector('[data-action=manual]').click()");
+    errorWindow.focus();
+    await waitFor(() => errorWindow.isFocused());
+    const controls = Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === 'Device Settings…');
+    assert.ok(controls);
+    controls.click();
     await waitFor(() => failed.isVisible() && errorWindow.isDestroyed());
     assert.equal(await failed.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"), true);
     assert.equal(await failed.webContents.executeJavaScript("document.querySelector('input[type=password]').getBoundingClientRect().width > 0"), true, 'Manual login fields are accessible');
+    controls.click();
+    await waitFor(() => !failed.isVisible() && coverFor(failed)?.isVisible());
+    const restored = coverFor(failed);
+    assert.ok(restored);
+    await restored.webContents.executeJavaScript("document.querySelector('[data-action=manual]').click()");
+    await waitFor(() => failed.isVisible() && restored.isDestroyed());
+    assert.equal(await failed.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"), true, 'Both shortcut and button expose manual controls');
+
     console.log('PASS: local startup progress in both start modes, hidden vendor login, unchanged progress window through session reload, authenticated reveal, bounded failure and manual login');
     failureServer.close(); server.close(); app.exit(0);
   } catch (error) { console.error(error); failureServer.close(); server.close(); app.exit(1); }
