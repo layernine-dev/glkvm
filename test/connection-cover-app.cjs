@@ -89,7 +89,8 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(window.isVisible(), true, 'Show the authenticated device window');
       assert.equal(window.webContents.isLoading(), false, 'Reveal only after the authenticated page finishes loading');
     }
-    const reloading = viewers[0];
+    const reloading = viewers.find(window => window.getTitle() === 'clean');
+    assert.ok(reloading);
     app.focus({ steal: true }); reloading.focus();
     await waitFor(() => reloading.isFocused());
     reloading.webContents.reload();
@@ -101,6 +102,18 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(reloading.isFocused(), false, 'Reload completion does not steal focus after app deactivation');
     app.focus({ steal: true }); reloading.show();
     await waitFor(() => reloading.isVisible());
+    reloading.minimize();
+    await waitFor(() => reloading.isMinimized());
+    reloading.webContents.reload();
+    await waitFor(() => coverFor(reloading));
+    await waitFor(() => !reloading.webContents.isLoading() && !coverFor(reloading));
+    assert.equal(reloading.isMinimized(), true, 'A completed background reload preserves minimization');
+    reloading.webContents.reload();
+    await waitFor(() => coverFor(reloading));
+    app.emit('second-instance', {}, [], process.cwd());
+    await waitFor(() => coverFor(reloading)?.isVisible());
+    assert.equal(reloading.isVisible(), false, 'Reopening a minimized loading connection never restores the remote page');
+    await waitFor(() => reloading.isVisible() && !reloading.isMinimized() && !coverFor(reloading));
     // A returning SPA login must report authenticated readiness again without HDMI video.
     const returning = viewers.find(window => window.getTitle() === 'options');
     assert.ok(returning);

@@ -22,7 +22,7 @@ const { setupUpdates } = require('./updates.cjs');
 let updates = null;
 app.setName('GLKVM Clean');
 /** @typedef {import('./config.cjs').Device} Device */
-/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, cover: ReturnType<typeof createCover> | null, pageReady: boolean, pageLoaded: boolean, manualLogin: boolean, revealActive: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
+/** @typedef {{window: Electron.BrowserWindow, device: Device, controlEnabled: boolean, moving: boolean, streaming: boolean, playerFocused?: boolean, needsLogin: boolean, loginStatus: string, loginTimer: ReturnType<typeof setTimeout> | null, cover: ReturnType<typeof createCover> | null, pageReady: boolean, pageLoaded: boolean, manualLogin: boolean, revealActive: boolean, revealMinimized: boolean, pausedForeground: boolean | null, background: boolean, options: boolean, cleanBounds: Electron.Rectangle | null, selectedScale: number | null, chrome: {width: number, height: number} | null, videoSize: {width: number, height: number} | null, audio: import('./audio.cjs').RouteState & {ready: boolean, devices: import('./audio.cjs').AudioDevices | null, status: import('./audio.cjs').AudioStatus | null, startup: import('./audio.cjs').StartupStatus | null, salt: string | null, saltAttempts: number, saltTimer: ReturnType<typeof setTimeout> | null}}} Entry */
 /** @type {Map<string, Entry>} */
 const windows = new Map();
 /** @type {Map<string, Entry>} */
@@ -62,7 +62,8 @@ function dismissCover(entry) {
 /** @param {Entry} entry */
 function ensureCover(entry) {
   if (entry.manualLogin || !isViewer(entry)) return;
-  if (entry.window.isVisible()) {
+  if (!entry.cover) entry.revealMinimized = entry.window.isMinimized();
+  if (entry.window.isVisible() && !entry.window.isMinimized()) {
     if (!entry.cover) entry.revealActive = entry.window.isFocused();
     entry.window.hide();
   }
@@ -86,7 +87,7 @@ function revealDevice(entry) {
   const active = entry.cover?.window.isFocused() || (entry.revealActive && app.isActive() && (!focused || focused === entry.window));
   dismissCover(entry);
   sendMode(entry);
-  if (!entry.background && !entry.window.isVisible()) {
+  if (!entry.background && !entry.revealMinimized && !entry.window.isVisible()) {
     if (active) entry.window.show();
     else {
       // Frameless macOS windows can activate asynchronously even with showInactive.
@@ -370,7 +371,10 @@ function showDevice(device, consoleWindow = false, background = false) {
   if (existing) {
     if (!background) {
       existing.background = false;
-      if (existing.window.isMinimized()) existing.window.restore();
+      if (existing.cover) {
+        existing.revealMinimized = false;
+        existing.window.hide();
+      } else if (existing.window.isMinimized()) existing.window.restore();
       const target = existing.cover?.window || existing.window;
       target.show(); target.focus();
     }
@@ -404,7 +408,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   });
   // A viewer opened while audio switching is paused uses the background profile until resumed.
   /** @type {Entry} */
-  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, cover: null, pageReady: false, pageLoaded: false, manualLogin: false, revealActive: true, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
+  const entry = { window: win, device, controlEnabled: config.controlEnabled, moving: false, streaming: false, playerFocused: false, needsLogin: false, loginStatus: '', loginTimer: null, cover: null, pageReady: false, pageLoaded: false, manualLogin: false, revealActive: true, revealMinimized: false, pausedForeground: audioSwitchingPaused && !consoleWindow ? false : null, background, options: false, selectedScale: device.windowScale ?? null, chrome: null, cleanBounds: null, videoSize: null, audio: { ready: false, route: null, outputGeneration: 0, devices: null, status: null, startup: null, salt: null, saltAttempts: 0, saltTimer: null } };
   collection.set(device.id, entry);
   updateCatalog();
   if (!consoleWindow && device.startMode === 'options-enabled') setDeviceOptions(entry, true, false);
@@ -422,6 +426,12 @@ function showDevice(device, consoleWindow = false, background = false) {
   if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => syncAudio());
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
   win.on('blur', () => { if (!consoleWindow) releaseInput(entry); });
+  win.on('restore', () => {
+    if (!entry.cover) return;
+    entry.revealMinimized = false;
+    win.hide();
+    entry.cover.window.show(); entry.cover.window.focus();
+  });
   win.on('resized', installMenu);
   win.on('moved', installMenu);
   win.on('enter-full-screen', installMenu);
@@ -506,6 +516,7 @@ function toggleDeviceSettings() {
 function setDeviceOptions(entry, enabled, manual = true) {
   if (manual) {
     entry.manualLogin = enabled && !entry.pageReady;
+    if (enabled) entry.revealMinimized = false;
     if (!enabled && entry.device.encryptedPassword && (!entry.pageReady || entry.needsLogin)) ensureCover(entry);
     else { dismissCover(entry); if (!entry.background) entry.window.show(); }
   }
