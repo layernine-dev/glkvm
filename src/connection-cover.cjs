@@ -40,7 +40,7 @@ function createCover(window, name, onAction) {
   progress.webContents.on('did-finish-load', send);
   progress.once('ready-to-show', () => { if (!progress.isDestroyed() && !window.isDestroyed() && !window.isMinimized() && !app.isHidden()) progress.showInactive(); });
   void progress.webContents.loadURL(url).catch(() => {
-    if (!window.isDestroyed()) onAction('manual');
+    if (!closing && !progress.isDestroyed() && !window.isDestroyed()) onAction('manual');
   });
   return {
     window: progress,
