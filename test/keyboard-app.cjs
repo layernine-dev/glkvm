@@ -225,6 +225,27 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length >= 2'));
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'KeyB'], ['keyup', 'KeyB']], 'No stale shortcut modifier reaches the remote computer');
+    // Native window switches release held input without discarding the keyboard target.
+    const other = new BrowserWindow({ show: false });
+    await other.loadURL('about:blank');
+    try {
+      await win.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
+      sendKey('keyDown', 'Control', ['control']);
+      sendKey('keyDown', 'D', ['control']);
+      await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length === 2'));
+      other.show(); other.focus();
+      await waitFor(() => other.isFocused());
+      await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length === 4'));
+      win.focus(); await waitFor(() => win.isFocused());
+      assert.equal(await win.webContents.executeJavaScript("document.activeElement.id"), 'stream-box', 'Returning to the viewer preserves player focus');
+      press('B', []);
+      await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length === 6'));
+      assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [['keydown', 'ControlLeft'], ['keydown', 'KeyD'], ['keyup', 'ControlLeft'], ['keyup', 'KeyD'], ['keydown', 'KeyB'], ['keyup', 'KeyB']], 'Held keys are released and the next key works without a click');
+      await win.webContents.executeJavaScript("document.querySelector('#local-input').focus(); window.keyLog = []");
+      other.focus(); await waitFor(() => other.isFocused());
+      win.focus(); await waitFor(() => win.isFocused());
+      assert.equal(await win.webContents.executeJavaScript('document.activeElement.id'), 'local-input', 'Returning preserves a local field instead of focusing the player');
+    } finally { other.destroy(); }
     // Move mode and view-only input gates still toggle the pause, with the stream live.
     /** @param {string} label */
     const menuItem = label => Menu.getApplicationMenu()?.items.flatMap(item => item.submenu?.items || []).find(item => item.label === label);
