@@ -213,8 +213,8 @@ ipcRenderer.on('glkvm:keyboard-action', async (_event, command) => {
   } finally { keyboardBusy = false; }
 });
 
-/** @param {unknown} [preserveLocalModifiers] */
-function releaseInput(preserveLocalModifiers = false) {
+/** @param {unknown} [preserveLocalModifiers] @param {boolean} [preserveFocus] */
+function releaseInput(preserveLocalModifiers = false, preserveFocus = false) {
   pendingModifiers.clear();
   if (preserveLocalModifiers !== true) { heldModifiers.clear(); consumedKeys.clear(); }
   releasing = true;
@@ -223,12 +223,16 @@ function releaseInput(preserveLocalModifiers = false) {
       for (const key of pressedKeys.values()) player.dispatchEvent(new KeyboardEvent('keyup', { ...key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, bubbles: true }));
       const target = player.querySelector('#video-wrapper') || player;
       for (const button of pressedButtons) target.dispatchEvent(new MouseEvent('mouseup', { button, bubbles: true }));
-      player.blur();
+      if (!preserveFocus) player.blur();
     }
     if (document.pointerLockElement) document.exitPointerLock();
   } finally { pressedKeys.clear(); pressedButtons.clear(); releasing = false; }
 }
-ipcRenderer.on('glkvm:release-input', releaseInput);
+ipcRenderer.on('glkvm:release-input', () => releaseInput());
+// Native and renderer blur can both fire. Keep the DOM focus while clearing
+// held input so returning to this window resumes its previous keyboard target.
+function suspendInput() { releaseInput(false, true); }
+ipcRenderer.on('glkvm:suspend-input', suspendInput);
 ipcRenderer.on('glkvm:background-video', (_event, paused) => {
   pauseBackgroundVideo = paused === true;
   syncBackgroundVideo();
@@ -247,7 +251,7 @@ ipcRenderer.on('glkvm:mode', (_event, mode) => {
   deviceName = typeof mode?.name === 'string' ? mode.name : '';
   if (surface) update();
 });
-window.addEventListener('blur', releaseInput);
+window.addEventListener('blur', suspendInput);
 
 for (const name of [
   'keydown', 'keyup', 'keypress', 'beforeinput', 'input',

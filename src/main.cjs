@@ -374,7 +374,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   // Audio profiles follow native window focus and visibility, not player focus.
   if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => { syncAudio(); win.webContents.send('glkvm:background-video', config.experimentalPauseBackgroundVideo === true && !isForeground(entry)); });
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
-  win.on('blur', () => { if (!consoleWindow) releaseInput(entry); });
+  win.on('blur', () => { if (!consoleWindow) win.webContents.send('glkvm:suspend-input'); });
   win.on('resized', installMenu);
   win.on('moved', installMenu);
   win.on('enter-full-screen', installMenu);
