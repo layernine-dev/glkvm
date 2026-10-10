@@ -210,6 +210,8 @@ server.listen(0, '127.0.0.1', async () => {
     assert.equal(status(first)?.inputDevice, null, 'No microphone is sending');
     assert.equal(first.webContents.isAudioMuted(), true, 'A missing speaker mutes the window');
     assert.equal(await run(first, 'window.mic.track.readyState'), 'live', 'The vendor track survives for a later replug');
+    // Device IPC and the Settings renderer update in separate turns.
+    await waitFor(() => run(settings, "document.querySelector('.audio-status').textContent.includes('Selected microphone unavailable')"), 'missing device status in Settings');
     const shown = await run(settings, `(() => { const select = document.querySelector('.audio-foreground-input'); return { value: select.value, text: select.selectedOptions[0].textContent, status: document.querySelector('.audio-status').textContent }; })()`);
     assert.deepEqual([shown.value, shown.text], [`uid:${gone.uid}`, 'Unplugged — not available'], 'The unavailable choice is retained');
     assert.equal(status(first)?.output, null, 'An unresolved speaker is never sent as the system default');
