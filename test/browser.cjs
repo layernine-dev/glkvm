@@ -34,6 +34,9 @@ app.whenReady().then(async () => {
   }
   try {
     await win.loadFile(path.join(__dirname, 'fixture.html'));
+    // Native input requires a focused window, including on Chromium 156.
+    win.show(); app.focus({ steal: true }); win.focus();
+    await waitFor(win, 'document.hasFocus()');
     assert.equal(await win.webContents.executeJavaScript('typeof require'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('typeof settings'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('getComputedStyle(document.body).visibility'), 'hidden');
