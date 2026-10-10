@@ -77,6 +77,7 @@ server.listen(0, '127.0.0.1', async () => {
   config.devices = [{ id: 'fixture', name: 'Fixture', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true }];
   config.devices.push({ id: 'second', name: 'Second', origin: config.devices[0].origin.replace('127.0.0.1', 'localhost'), openAtStartup: false });
   await app.whenReady();
+  config.experimentalAllowDisplaySleep = true;
   const stored = await prepareConfig({ ...config, devices: [{ ...config.devices[0], password: 'incorrect-fixture-secret' }, config.devices[1]] }, config, safeStorage);
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(stored));
   require('../src/main.cjs');
@@ -158,6 +159,15 @@ server.listen(0, '127.0.0.1', async () => {
     app.focus({ steal: true });
     clean.focus();
     await waitFor(() => clean.isFocused());
+    assert.equal(await clean.webContents.executeJavaScript(`(async () => {
+      try {
+        const lock = await navigator.wakeLock.request('screen');
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const active = !lock.released;
+        await lock.release();
+        return active;
+      } catch { return false; }
+    })()`), false, 'The opted-in viewer cannot hold a screen wake lock');
     await clean.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
     await new Promise(resolve => setTimeout(resolve, 150));
     clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['meta'] });

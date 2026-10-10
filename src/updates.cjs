@@ -1,3 +1,4 @@
+const { plainReleaseNotes } = require('./release-notes.cjs');
 /** @typedef {{glkvmUpdates?: boolean, [key: string]: unknown}} UpdateManifest */
 
 /** Development and GUI bundles are packaged too: require the release-only marker.
@@ -16,7 +17,22 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
   let busy = false;
   let manual = false;
   let downloaded = false;
+  let notes = '';
+  let releaseName = '';
+  let prompting = false;
   let stopUpdates = () => {};
+  async function promptUpdate() {
+    if (prompting) return;
+    prompting = true;
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: 'info', title: 'GLKVM Clean Update', message: releaseName || 'An update is ready.',
+        detail: `Restart GLKVM Clean to install it.\n\nWhat's changed\n\n${notes || 'Release notes are unavailable for this version.'}`,
+        buttons: ['Restart', 'Later'], defaultId: 1, cancelId: 1,
+      });
+      if (response === 0) autoUpdater.quitAndInstall();
+    } finally { prompting = false; }
+  }
   autoUpdater.on('checking-for-update', () => { busy = true; });
   autoUpdater.on('update-not-available', () => {
     busy = false;
@@ -28,23 +44,27 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
     if (manual) void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.', detail: 'Please try again later.' });
     manual = false;
   });
-  autoUpdater.on('update-downloaded', () => { busy = false; manual = false; downloaded = true; stopUpdates(); });
+  autoUpdater.on('update-downloaded', (_event, releaseNotes, name) => {
+    busy = false; manual = false; downloaded = true;
+    notes = plainReleaseNotes(releaseNotes);
+    releaseName = typeof name === 'string' ? name.slice(0, 200) : '';
+    stopUpdates();
+    void promptUpdate();
+  });
   autoUpdater.on('before-quit-for-update', releaseInput);
   const updater = updateElectronApp({
     updateSource: { type: require('update-electron-app').UpdateSourceType.ElectronPublicUpdateService, repo: 'layernine-dev/glkvm' },
     updateInterval: '1 hour',
-    // The library supplies download, signature validation via Squirrel, and the
-    // native Restart / Later dialog. Never force a restart during a KVM session.
-    notifyUser: true,
+    // Squirrel handles download and signature validation. The app's native
+    // dialog includes release notes and never forces a restart during a session.
+    notifyUser: false,
   });
   stopUpdates = updater.stopUpdates;
   app.on('will-quit', stopUpdates);
   return {
     check() {
       if (downloaded) {
-        void dialog.showMessageBox({ type: 'info', message: 'An update is ready.', detail: 'Restart GLKVM Clean to install it.', buttons: ['Restart', 'Later'], defaultId: 1, cancelId: 1 }).then(({ response }) => {
-          if (response === 0) autoUpdater.quitAndInstall();
-        });
+        void promptUpdate();
       } else if (!busy) {
         manual = true;
         try { autoUpdater.checkForUpdates(); }

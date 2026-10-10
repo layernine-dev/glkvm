@@ -60,6 +60,7 @@ function fixture(t, updatesEnabled = config.updatesEnabled) {
     require: (/** @type {string} */ name) => {
       if (name === 'node:child_process') return { spawnSync };
       if (name === '../release.json') return releaseConfig;
+      if (name === './changelog.cjs') return { releaseNotes: () => "## What's changed\n\n- Example change" };
       if (name.startsWith('./')) return {};
       return require(name);
     },
@@ -72,6 +73,7 @@ test('publishing verifies draft assets before going live and retries keep publis
   assert.equal(publisher.alreadyPublished(), false);
   publisher.publishRelease();
   assert.equal(state.release.draft, false);
+  assert.match(state.release.body, /## What's changed[\s\S]*Example change/);
   assert.equal(state.publishes, 1);
   assert.equal(publisher.alreadyPublished(), true);
   publisher.publishRelease();

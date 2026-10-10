@@ -362,6 +362,7 @@ function showDevice(device, consoleWindow = false, background = false) {
       preload: path.join(__dirname, consoleWindow ? 'console-preload.cjs' : 'preload.cjs'), partition,
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       webSecurity: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
+      disableWakeLocks: config.experimentalAllowDisplaySleep === true,
     },
   });
   // A viewer opened while audio switching is paused uses the background profile until resumed.
@@ -493,12 +494,21 @@ function showSettings() {
   void settingsWindow.loadURL(settingsURL);
 }
 
+async function showChangelog() {
+  const url = 'https://github.com/layernine-dev/glkvm/releases';
+  let notes;
+  try { notes = fs.readFileSync(path.join(app.getAppPath(), 'CHANGELOG.md'), 'utf8'); }
+  catch { await shell.openExternal(url); return; }
+  const { response } = await dialog.showMessageBox({ type: 'info', title: 'Changelog', message: 'GLKVM Clean — Changelog', detail: require('./release-notes.cjs').plainReleaseNotes(notes), buttons: ['Close', 'View on GitHub'], defaultId: 0, cancelId: 0 });
+  if (response === 1) await shell.openExternal(url);
+}
+
 function installMenu() {
   const entry = focusedEntry();
   const viewer = entry && windows.get(entry.device.id) === entry;
   const clean = viewer && !entry.options;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: app.name, submenu: [{ role: 'about' }, { label: 'Check for Updates…', enabled: !!updates, click: () => updates?.check() }, { label: 'Open Source Licenses…', click: () => { void shell.openPath(path.join(process.resourcesPath, 'licenses')); } }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: app.name, submenu: [{ role: 'about' }, { label: 'Changelog…', click: showChangelog }, { label: 'Check for Updates…', enabled: !!updates, click: () => updates?.check() }, { label: 'Open Source Licenses…', click: () => { void shell.openPath(path.join(process.resourcesPath, 'licenses')); } }, { type: 'separator' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: showSettings }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: entry ? `Device — ${entry.device.name}` : 'Device', submenu: [
       ...config.devices.map((device, i) => ({ label: `Open ${device.name}`, ...(i < 9 ? { accelerator: `CmdOrCtrl+${i + 1}` } : {}), click: () => showDevice(device) })),
       { label: 'Manage Connections…', click: showSettings }, { type: 'separator' },
