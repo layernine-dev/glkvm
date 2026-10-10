@@ -5,7 +5,7 @@ const { spawnSync } = require('node:child_process');
 const { resolveSigningIdentity } = require('./signing-identity.cjs');
 const { verifySignature } = require('./verify-signature.cjs');
 const { verifyLicenses } = require('./licenses.cjs');
-const { releaseNotes } = require('./changelog.cjs');
+const { releaseNotes, publishedReleaseRefs } = require('./changelog.cjs');
 const config = require('../release.json');
 const root = path.join(__dirname, '..');
 const output = path.join(root, 'dist/release');
@@ -101,7 +101,7 @@ function publishRelease() {
   if (api(`${repo}/commits/${info.tag}`).sha !== info.sha) throw new Error('Version tag belongs to a different source commit.');
   if (!release) release = api(`${repo}/releases`, {
     tag_name: info.tag, target_commitish: info.sha, name: `GLKVM Clean ${info.version}`, draft: true, prerelease: false,
-    body: `${marker}\n\n${releaseNotes(info)}\n\n## Installation\n\nApple Silicon, latest macOS. Download the ZIP, extract it and move GLKVM Clean.app to /Applications.\n\n## Runtime\n\nElectron ${info.electron}. Signed with Developer ID and notarized by Apple. Full third-party notices are included in the app (Open Source Licenses menu).`,
+    body: `${marker}\n\n${releaseNotes(info, publishedReleaseRefs(releases))}\n\n## Installation\n\nApple Silicon, latest macOS. Download the ZIP, extract it and move GLKVM Clean.app to /Applications.\n\n## Runtime\n\nElectron ${info.electron}. Signed with Developer ID and notarized by Apple. Full third-party notices are included in the app (Open Source Licenses menu).`,
   });
   const files = [info.archive, 'SHA256SUMS', 'release.json'];
   if (release.draft) {

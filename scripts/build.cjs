@@ -53,7 +53,8 @@ async function buildApp({ tests = false, release = false, appVersion = version }
       fs.writeFileSync(file, JSON.stringify(manifest));
       const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
       if (sha.status !== 0) throw new Error('Cannot determine changelog source commit.');
-      fs.writeFileSync(path.join(buildPath, 'CHANGELOG.md'), require('./changelog.cjs').changelog(sha.stdout.trim(), release ? appVersion : 'Unreleased'));
+      const { changelog, publishedReleases } = require('./changelog.cjs');
+      fs.writeFileSync(path.join(buildPath, 'CHANGELOG.md'), changelog(sha.stdout.trim(), release ? appVersion : 'Unreleased', release ? publishedReleases() : []));
     }],
     afterPrune: [({ buildPath }) => collectRuntimeLicenses(buildPath, path.join(buildPath, '../licenses'))],
     extendInfo: {

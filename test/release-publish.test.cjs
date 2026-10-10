@@ -60,7 +60,7 @@ function fixture(t, updatesEnabled = config.updatesEnabled) {
     require: (/** @type {string} */ name) => {
       if (name === 'node:child_process') return { spawnSync };
       if (name === '../release.json') return releaseConfig;
-      if (name === './changelog.cjs') return { releaseNotes: () => "## What's changed\n\n- Example change" };
+      if (name === './changelog.cjs') return { publishedReleaseRefs: () => [], releaseNotes: () => "## What's changed\n\n- Example change" };
       if (name.startsWith('./')) return {};
       return require(name);
     },

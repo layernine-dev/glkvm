@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { plainReleaseNotes } = require('../src/release-notes.cjs');
 
-test('release notes include skipped releases and ignore unrelated branch tags', t => {
+test('release notes include failed draft tags and ignore unrelated branch tags', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-changelog-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const git = (/** @type {string[]} */ args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
@@ -22,6 +22,7 @@ test('release notes include skipped releases and ignore unrelated branch tags', 
   git(['tag', 'v9.0.0']);
   git(['switch', '-q', 'main']);
   git(['commit', '--allow-empty', '-qm', 'Fix focus preservation']);
+  git(['tag', 'v0.1.22']);
   git(['commit', '--allow-empty', '-qm', 'Allow display sleep (#1)']);
   const sha = git(['rev-parse', 'HEAD']);
   git(['tag', 'v0.1.23']);
@@ -34,14 +35,20 @@ test('release notes include skipped releases and ignore unrelated branch tags', 
       return require(name);
     },
   });
-  const notes = loaded.exports.releaseNotes({ sha, tag: 'v0.1.23', repository: 'layernine-dev/glkvm' });
+  const published = loaded.exports.publishedReleaseRefs([
+    { tag_name: 'v0.1.21', draft: false, prerelease: false },
+    { tag_name: 'v0.1.22', draft: true, prerelease: false },
+    { tag_name: 'v0.1.23', draft: false, prerelease: false },
+    { tag_name: 'v9.0.0', draft: false, prerelease: false },
+  ]);
+  const notes = loaded.exports.releaseNotes({ sha, tag: 'v0.1.23', repository: 'layernine-dev/glkvm' }, published);
   assert.match(notes, /Fix focus preservation/);
   assert.match(notes, /Allow display sleep/);
   assert.match(notes, /compare\/v0\.1\.21\.\.\.v0\.1\.23/);
   assert.doesNotMatch(notes, /Unreleased branch experiment/);
-  const changelog = loaded.exports.changelog(sha, '0.1.23');
+  const changelog = loaded.exports.changelog(sha, '0.1.23', published);
   assert.equal((changelog.match(/## 0\.1\.23/g) || []).length, 1);
-  assert.doesNotMatch(changelog, /9\.0\.0/);
+  assert.doesNotMatch(changelog, /9\.0\.0|## 0\.1\.22/);
 });
 
 test('native update notes show changes without installation metadata or active markup', () => {

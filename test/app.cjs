@@ -91,6 +91,7 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Fixture — Device Settings'));
     const login = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture — Device Settings');
     assert.ok(login);
+    await waitFor(() => !login.webContents.isLoading());
     // Electron uses this internal diagnostic getter itself; public typings omit it.
     // Reading the real preferences also covers the hidden helper, where the
     // Screen Wake Lock API would fail simply because the document is hidden.
@@ -98,7 +99,6 @@ server.listen(0, '127.0.0.1', async () => {
       const contents = /** @type {Electron.WebContents & { getLastWebPreferences: () => Electron.WebPreferences }} */ (win.webContents);
       assert.equal(contents.getLastWebPreferences().disableWakeLocks, true, 'The opt-in policy reaches viewers and hidden login helpers');
     }
-    await waitFor(() => !login.webContents.isLoading());
     assert.equal(login.isVisible(), false);
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
     assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);

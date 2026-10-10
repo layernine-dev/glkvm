@@ -98,7 +98,8 @@ Apple-dependent path.
 ## Changelog and update dialog
 
 Release publication generates a **What's changed** section from first-parent
-commit subjects since the preceding release tag. Skipped/failed releases are
+commit subjects since the preceding published GitHub release. Drafts and tags
+left by failed publication attempts are excluded as boundaries, so their changes are
 included in the next published version. PR titles should describe observable
 behavior; squash commit descriptions can provide implementation context.
 The source commit marker, installation instructions and runtime provenance stay
@@ -108,7 +109,8 @@ Manual checks reopen the same notes after dismissing the automatic prompt.
 
 Every signed bundle also includes a generated `CHANGELOG.md`, available offline
 through **GLKVM Clean → Changelog…**, with a link to GitHub's full release history.
-Development bundles label their current source as Unreleased.
+Development bundles label their current source as Unreleased and omit the
+published history, without requiring GitHub access.
 
 To fill historical release descriptions from their source commits:
 
