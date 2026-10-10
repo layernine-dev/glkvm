@@ -7,6 +7,7 @@ function gh(args, input) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8', input: input === undefined ? undefined : JSON.stringify(input) }));
 }
 const apply = process.argv.includes('--apply');
+const latest = gh(['api', `repos/${repository}/releases/latest`]);
 const releases = gh(['api', `repos/${repository}/releases?per_page=100`, '--paginate', '--slurp']).flat();
 for (const release of releases) {
   if (release.draft || release.prerelease || !/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.body?.includes("## What's changed")) continue;
@@ -18,10 +19,12 @@ for (const release of releases) {
   const notes = releaseNotes({ sha, tag: release.tag_name, repository }) + (historical ? '\n\nThese notes describe the sanitized historical source snapshot. The original binary predates that snapshot; see the provenance below.' : '');
   const body = historical ? `${notes}\n\n${release.body}` : release.body.replace(`Source commit: ${sha}`, `Source commit: ${sha}\n\n${notes}`);
   if (!apply) { console.log(`${release.tag_name}\n${notes}\n`); continue; }
-  gh(['api', `repos/${repository}/releases/${release.id}`, '--method', 'PATCH', '--input', '-'], { body });
+  gh(['api', `repos/${repository}/releases/${release.id}`, '--method', 'PATCH', '--input', '-'], { body, make_latest: release.id === latest.id ? 'true' : 'false' });
   const readback = gh(['api', `repos/${repository}/releases/${release.id}`]);
   if (readback.body !== body || JSON.stringify(readback.assets.map((/** @type {any} */ asset) => [asset.id, asset.digest, asset.size])) !== JSON.stringify(release.assets.map((/** @type {any} */ asset) => [asset.id, asset.digest, asset.size]))) {
     throw new Error(`Release description/assets did not verify: ${release.tag_name}`);
   }
   console.log(`Verified release notes: ${release.html_url}`);
 }
+
+if (apply && gh(['api', `repos/${repository}/releases/latest`]).id !== latest.id) throw new Error('The latest release changed during backfill; recheck publication state.');
