@@ -132,7 +132,8 @@ GLKVM Clean after changing it: Electron applies this preference when creating
 WebContents. Video and input remain enabled. Active WebRTC connections may still
 prevent system idle sleep; display sleep and system sleep are separate policies.
 
-Signed fixture coverage exercises the setting and native wake-lock behavior.
+Signed fixture coverage verifies the persisted policy and the actual Electron
+preferences on viewers and hidden login helpers, alongside live video and input.
 Real-device acceptance remains separate: verify `pmset -g assertions`, live
 video and input before/after automatic display-off, multiple connections,
 reopening the app, and the resulting WebRTC system-sleep assertions.

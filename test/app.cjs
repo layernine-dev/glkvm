@@ -91,6 +91,13 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'Fixture — Device Settings'));
     const login = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture — Device Settings');
     assert.ok(login);
+    // Electron uses this internal diagnostic getter itself; public typings omit it.
+    // Reading the real preferences also covers the hidden helper, where the
+    // Screen Wake Lock API would fail simply because the document is hidden.
+    for (const win of [clean, login]) {
+      const contents = /** @type {Electron.WebContents & { getLastWebPreferences: () => Electron.WebPreferences }} */ (win.webContents);
+      assert.equal(contents.getLastWebPreferences().disableWakeLocks, true, 'The opt-in policy reaches viewers and hidden login helpers');
+    }
     await waitFor(() => !login.webContents.isLoading());
     assert.equal(login.isVisible(), false);
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
@@ -159,15 +166,7 @@ server.listen(0, '127.0.0.1', async () => {
     app.focus({ steal: true });
     clean.focus();
     await waitFor(() => clean.isFocused());
-    assert.equal(await clean.webContents.executeJavaScript(`(async () => {
-      try {
-        const lock = await navigator.wakeLock.request('screen');
-        await new Promise(resolve => setTimeout(resolve, 150));
-        const active = !lock.released;
-        await lock.release();
-        return active;
-      } catch { return false; }
-    })()`), false, 'The opted-in viewer cannot hold a screen wake lock');
+
     await clean.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
     await new Promise(resolve => setTimeout(resolve, 150));
     clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['meta'] });
