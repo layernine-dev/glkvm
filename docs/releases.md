@@ -74,7 +74,7 @@ through Open Source Licenses.
 
 The integration checks at startup
 and hourly, downloads in the background and offers the native Restart / Later
-dialog. The app menu also provides Check for Updates. KVM input is released before
+dialog, including release notes. The app menu also provides Check for Updates and Changelog. KVM input is released before
 update shutdown. The package's downloaded update is installed on the next normal
 start if restart is deferred. Network errors do not stop the app.
 
@@ -94,3 +94,48 @@ a test Mac: download, restart, new version, preserved settings and credentials,
 and continued microphone/network permissions. Also verify offline behavior and
 rejection of an invalidly signed update. Fixture tests alone do not certify this
 Apple-dependent path.
+
+## Changelog and update dialog
+
+Release publication generates a **What's changed** section from first-parent
+commit subjects since the preceding published GitHub release. Drafts and tags
+left by failed publication attempts are excluded as boundaries, so their changes are
+included in the next published version. PR titles should describe observable
+behavior; squash commit descriptions can provide implementation context.
+The source commit marker, installation instructions and runtime provenance stay
+in the release body. The update service carries that body into the native
+Restart / Later dialog; GLKVM displays the changes and defaults to Later.
+Manual checks reopen the same notes after dismissing the automatic prompt.
+
+Every signed bundle also includes a generated `CHANGELOG.md`, available offline
+through **GLKVM Clean → Changelog…**, with a link to GitHub's full release history.
+Development bundles label their current source as Unreleased and omit the
+published history, without requiring GitHub access.
+
+To fill historical release descriptions from their source commits:
+
+```sh
+node scripts/backfill-release-notes.cjs          # Preview
+node scripts/backfill-release-notes.cjs --apply  # Update descriptions and read back
+```
+
+The backfill validates each tag/source association and preserves all published
+assets, sizes and digests. Version 0.1.22 predates the source-history cleanup;
+its notes explicitly describe the sanitized source snapshot and retain the
+original binary-provenance caveat.
+
+## Experimental local display sleep
+
+Electron 45 beta is explicitly authorized for the opt-in setting from #1.
+**Settings → Controls → Experimental → Allow local display sleep** disables
+WebContents wake locks for device viewers and Device Settings/login helpers.
+It defaults to off and is independent of Pause video in background. Restart
+GLKVM Clean after changing it: Electron applies this preference when creating
+WebContents. Video and input remain enabled. Active WebRTC connections may still
+prevent system idle sleep; display sleep and system sleep are separate policies.
+
+Signed fixture coverage verifies the persisted policy and the actual Electron
+preferences on viewers and hidden login helpers, alongside live video and input.
+Real-device acceptance remains separate: verify `pmset -g assertions`, live
+video and input before/after automatic display-off, multiple connections,
+reopening the app, and the resulting WebRTC system-sleep assertions.

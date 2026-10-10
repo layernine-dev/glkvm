@@ -77,6 +77,7 @@ server.listen(0, '127.0.0.1', async () => {
   config.devices = [{ id: 'fixture', name: 'Fixture', origin: `http://127.0.0.1:${address.port}`, openAtStartup: true }];
   config.devices.push({ id: 'second', name: 'Second', origin: config.devices[0].origin.replace('127.0.0.1', 'localhost'), openAtStartup: false });
   await app.whenReady();
+  config.experimentalAllowDisplaySleep = true;
   const stored = await prepareConfig({ ...config, devices: [{ ...config.devices[0], password: 'incorrect-fixture-secret' }, config.devices[1]] }, config, safeStorage);
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(stored));
   require('../src/main.cjs');
@@ -91,6 +92,13 @@ server.listen(0, '127.0.0.1', async () => {
     const login = BrowserWindow.getAllWindows().find(win => win.getTitle() === 'Fixture — Device Settings');
     assert.ok(login);
     await waitFor(() => !login.webContents.isLoading());
+    // Electron uses this internal diagnostic getter itself; public typings omit it.
+    // Reading the real preferences also covers the hidden helper, where the
+    // Screen Wake Lock API would fail simply because the document is hidden.
+    for (const win of [clean, login]) {
+      const contents = /** @type {Electron.WebContents & { getLastWebPreferences: () => Electron.WebPreferences }} */ (win.webContents);
+      assert.equal(contents.getLastWebPreferences().disableWakeLocks, true, 'The opt-in policy reaches viewers and hidden login helpers');
+    }
     assert.equal(login.isVisible(), false);
     await waitFor(() => clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status')?.textContent === 'Signing in…'"));
     assert.equal(await clean.webContents.executeJavaScript("document.querySelector('#glkvm-clean-status').classList.contains('busy')"), true);
@@ -158,6 +166,7 @@ server.listen(0, '127.0.0.1', async () => {
     app.focus({ steal: true });
     clean.focus();
     await waitFor(() => clean.isFocused());
+
     await clean.webContents.executeJavaScript("document.querySelector('#stream-box').focus(); window.keyLog = []");
     await new Promise(resolve => setTimeout(resolve, 150));
     clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['meta'] });

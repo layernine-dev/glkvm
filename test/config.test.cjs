@@ -84,3 +84,18 @@ test('startup audio persists independently per connection and malformed values c
     assert.equal(saved.devices[0].audio?.startup.speaker, true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('display sleep is opt-in, persisted, and independent of background video pause', () => {
+  const legacy = defaults();
+  delete legacy.experimentalAllowDisplaySleep;
+  assert.equal(validateConfig(legacy).experimentalAllowDisplaySleep, false);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-sleep-'));
+  try {
+    const file = path.join(dir, 'settings.json');
+    writeConfig(file, { ...legacy, experimentalAllowDisplaySleep: true, experimentalPauseBackgroundVideo: false });
+    const saved = readConfig(file);
+    assert.equal(saved.experimentalAllowDisplaySleep, true);
+    assert.equal(saved.experimentalPauseBackgroundVideo, false);
+    for (const value of [null, 1, 'true']) assert.throws(() => validateConfig({ ...saved, experimentalAllowDisplaySleep: value }));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -13,7 +13,8 @@ async function waitFor(win, expression) {
     if (await win.webContents.executeJavaScript(expression)) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out: ${expression}`);
+  const state = await win.webContents.executeJavaScript('JSON.stringify({ focused: document.hasFocus(), active: document.activeElement?.id, inputEvents, mouseEvents, keyReleases, mouseReleases, lastPoint, keyLog })');
+  throw new Error(`Timed out: ${expression}; input state: ${state}`);
 }
 app.whenReady().then(async () => {
   /** @type {{width: number, height: number}[]} */
@@ -34,6 +35,9 @@ app.whenReady().then(async () => {
   }
   try {
     await win.loadFile(path.join(__dirname, 'fixture.html'));
+    // Native input requires a focused window, including on Chromium 156.
+    win.show(); app.focus({ steal: true }); win.focus();
+    await waitFor(win, 'document.hasFocus()');
     assert.equal(await win.webContents.executeJavaScript('typeof require'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('typeof settings'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('getComputedStyle(document.body).visibility'), 'hidden');
@@ -81,7 +85,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'mouseMove', x: 480, y: 270 });
     win.webContents.sendInputEvent({ type: 'mouseDown', x: 480, y: 270, button: 'left', clickCount: 1 });
     win.webContents.sendInputEvent({ type: 'mouseUp', x: 480, y: 270, button: 'left', clickCount: 1 });
-    await waitFor(win, 'window.mouseEvents === 1');
+    await waitFor(win, 'window.mouseEvents === 1 && window.mouseReleases === 1 && window.lastPoint !== null');
     assert.deepEqual(await win.webContents.executeJavaScript('window.lastPoint'), { x: .5, y: .5, target: 'video-wrapper' });
     assert.equal(await win.webContents.executeJavaScript('document.activeElement.id'), 'stream-box');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'B' });
@@ -90,6 +94,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'mouseWheel', x: 480, y: 270, deltaY: 100, canScroll: true });
     await waitFor(win, 'window.scrollEvents > 0');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Control' });
+    await waitFor(win, 'window.inputEvents === 2');
     win.webContents.sendInputEvent({ type: 'mouseDown', x: 480, y: 270, button: 'left' });
     await waitFor(win, 'window.inputEvents === 2 && window.mouseEvents === 2');
     await mode(false);
