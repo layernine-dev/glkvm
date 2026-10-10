@@ -56,3 +56,28 @@ reusing it.
 The build fails on any other shipped dependency without a license text. Existing
 upstream notices remain intact, and the project's license does not replace them.
 Use `bun run licenses:check` to verify the app's complete bundled notice inventory.
+
+## Electron 45 beta runtime review (2026-10-11)
+
+The maintainer explicitly authorized Electron 45 beta for the experimental
+local-display-sleep feature in issue #1. Electron 45.0.0-beta.1 was published
+on 2026-10-09 and passed the unchanged 24-hour Bun cooldown. Other dependencies
+continue to follow stable releases. The GLKVM application remains on its ordinary
+public release channel.
+
+Reviewed upstream sources:
+
+- [Electron 45.0.0-beta.1 notes](https://releases.electronjs.org/release/v45.0.0-beta.1):
+  Chromium 156.0.8078.12 and the `net.fetch` response-header fix.
+- [Electron media salt](https://github.com/electron/electron/blob/v45.0.0-beta.1/shell/browser/media/media_device_id_salt.cc)
+  and [browser client](https://github.com/electron/electron/blob/v45.0.0-beta.1/shell/browser/electron_browser_client.cc):
+  the persistent session preference and salt selection remain unchanged.
+- [Chromium device-ID mapping](https://github.com/chromium/chromium/blob/156.0.8078.12/content/browser/media/media_devices_util.cc):
+  HMAC-SHA256 still uses the serialized origin as key and raw UID followed by
+  device salt as input. Default/communications IDs pass through.
+- [electron/notarize 3.1.2](https://github.com/electron/notarize/releases/tag/v3.1.2):
+  retries failed stapling. This is a build dependency.
+- `@types/node` 26.6.5 updates development type definitions only.
+
+The signed device-ID GUI scenario and read-only real-device scenario validate
+the runtime pairing; they do not prove physical KVM sleep/wake acceptance.

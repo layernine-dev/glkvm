@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 /** The versions whose sources were checked; another runtime must be re-verified. */
-const verifiedRuntime = { electron: '44.5.1', chrome: '152.0.7977.130' };
+const verifiedRuntime = { electron: '45.0.0-beta.1', chrome: '156.0.8078.12' };
 const saltPattern = /^[0-9A-F]{32}$/;
 
 /** @param {string} origin serialized origin, e.g. https://glkvm.local @param {string} uid @param {string} salt */
