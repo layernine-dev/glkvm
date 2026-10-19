@@ -21,6 +21,7 @@ test('manual checks avoid duplicate downloads, report errors, and release input 
   let response = 1;
   /** @type {any[]} */
   const messages = [];
+  const progress = { message: '', show(/** @type {string} */ message) { this.message = message; }, update(/** @type {string} */ message) { this.message = message; }, close() { this.message = ''; } };
   const app = Object.assign(new EventEmitter(), { isPackaged: true, getVersion: () => '0.1.22' });
   const autoUpdater = Object.assign(new EventEmitter(), {
     checkForUpdates() { checks++; autoUpdater.emit('checking-for-update'); },
@@ -30,7 +31,15 @@ test('manual checks avoid duplicate downloads, report errors, and release input 
     module: loaded, process: { platform: 'darwin', arch: 'arm64' },
     require: (/** @type {string} */ name) => name === './release-notes.cjs' ? require('../src/release-notes.cjs') : ({ UpdateSourceType: { ElectronPublicUpdateService: 0 }, updateElectronApp: () => ({ stopUpdates: () => { stopped++; } }) }),
   });
-  const updates = loaded.exports.setupUpdates({ app, autoUpdater, manifest: { glkvmUpdates: true }, releaseInput: () => { released++; }, quitAndInstall: () => { preparedRestarts++; }, dialog: { showMessageBox: async (/** @type {any} */ options) => { messages.push(options); return { response }; } } });
+  const updates = loaded.exports.setupUpdates({ app, autoUpdater, manifest: { glkvmUpdates: true }, releaseInput: () => { released++; }, quitAndInstall: () => { preparedRestarts++; }, progress, dialog: { showMessageBox: async (/** @type {any} */ options) => { messages.push(options); return { response }; } } });
+  // Startup checks are automatic. A click must join them and report the result.
+  autoUpdater.emit('checking-for-update');
+  updates.check();
+  assert.match(progress.message, /Checking/);
+  assert.equal(checks, 0, 'Join the automatic check without another request');
+  autoUpdater.emit('update-not-available');
+  assert.equal(progress.message, '');
+  assert.match(messages.pop().message, /up to date/);
   updates.check(); updates.check();
   assert.equal(checks, 1, 'No concurrent manual download');
   autoUpdater.emit('error', new Error('offline'));
@@ -39,8 +48,14 @@ test('manual checks avoid duplicate downloads, report errors, and release input 
   assert.equal(messages.length, 1, 'Background errors are quiet');
   updates.check(); autoUpdater.emit('update-not-available');
   assert.match(messages[1].message, /up to date/);
+  autoUpdater.emit('checking-for-update');
+  autoUpdater.emit('update-available');
+  updates.check();
+  assert.match(progress.message, /Downloading/);
+  assert.equal(checks, 2, 'An automatic download is reused too');
   autoUpdater.emit('update-downloaded', {}, "Source commit: hidden\n\n## What's changed\n\n- Fix input forwarding\n\n## Installation\n\nDownload the ZIP", 'GLKVM Clean 0.1.23');
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(progress.message, '');
   assert.match(messages[2].detail, /Fix input forwarding/);
   assert.doesNotMatch(messages[2].detail, /Source commit|Download the ZIP/);
   assert.equal(messages[2].defaultId, 1);

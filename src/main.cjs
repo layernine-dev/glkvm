@@ -17,6 +17,7 @@ const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./devic
 
 const { keyboardAction, matchesBinding } = require('./keyboard.cjs');
 const { setupUpdates } = require('./updates.cjs');
+const { createUpdateProgress } = require('./update-progress.cjs');
 const { setupShutdown } = require('./shutdown.cjs');
 /** @type {ReturnType<typeof setupUpdates>} */
 let updates = null;
@@ -862,7 +863,7 @@ else {
       await dialog.showMessageBox({ type: 'error', message: 'Could not read saved settings', detail: `${error instanceof Error ? error.message : String(error)}\n\nThe original file has been preserved at ${configPath}. The default connections will be shown until you save settings again.` });
     }
     screen.on('display-metrics-changed', installMenu);
-    updates = setupUpdates({ app, autoUpdater, dialog, manifest: require('../package.json'), releaseInput: () => { for (const entry of allEntries()) releaseInput(entry); }, quitAndInstall: () => shutdown.quitAndInstall() });
+    updates = setupUpdates({ app, autoUpdater, dialog, manifest: require('../package.json'), releaseInput: () => { for (const entry of allEntries()) releaseInput(entry); }, quitAndInstall: () => shutdown.quitAndInstall(), progress: createUpdateProgress(BrowserWindow) });
     installMenu(); openStartupDevices();
     app.on('activate', () => { if (!windows.size && !settingsWindow && !consoles.size) openStartupDevices(); });
   });
