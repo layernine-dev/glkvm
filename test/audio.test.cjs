@@ -96,9 +96,9 @@ test('the device ID salt is read from session preferences without guessing', () 
       write(invalid); assert.equal(readDeviceIdSalt(directory), null);
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
-  assert.equal(supportedRuntime(/** @type {NodeJS.ProcessVersions} */ ({ electron: '45.0.0-beta.1', chrome: '156.0.8078.12' })), true);
+  assert.equal(supportedRuntime(/** @type {NodeJS.ProcessVersions} */ ({ electron: '45.0.0-beta.5', chrome: '156.0.8078.36' })), true);
   assert.equal(supportedRuntime(/** @type {NodeJS.ProcessVersions} */ ({ electron: '45.0.0', chrome: '153.0.0.0' })), false, 'Another runtime must be re-verified');
-  assert.equal(require('electron/package.json').version, '45.0.0-beta.1', 'The installed Electron is the verified one');
+  assert.equal(require('electron/package.json').version, '45.0.0-beta.5', 'The installed Electron is the verified one');
 });
 
 test('the native catalog is validated and duplicate names are disambiguated', () => {

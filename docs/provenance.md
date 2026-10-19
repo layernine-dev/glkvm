@@ -57,27 +57,35 @@ The build fails on any other shipped dependency without a license text. Existing
 upstream notices remain intact, and the project's license does not replace them.
 Use `bun run licenses:check` to verify the app's complete bundled notice inventory.
 
-## Electron 45 beta runtime review (2026-10-11)
+## Electron 45 beta runtime review (2026-10-19)
 
 The maintainer explicitly authorized Electron 45 beta for the experimental
-local-display-sleep feature in issue #1. Electron 45.0.0-beta.1 was published
-on 2026-10-09 and passed the unchanged 24-hour Bun cooldown. Other dependencies
+local-display-sleep feature in issue #1. Electron 45.0.0-beta.5 was published
+on 2026-10-16 and passed the unchanged 24-hour Bun cooldown. Other dependencies
 continue to follow stable releases. The GLKVM application remains on its ordinary
 public release channel.
 
 Reviewed upstream sources:
 
-- [Electron 45.0.0-beta.1 notes](https://releases.electronjs.org/release/v45.0.0-beta.1):
-  Chromium 156.0.8078.12 and the `net.fetch` response-header fix.
-- [Electron media salt](https://github.com/electron/electron/blob/v45.0.0-beta.1/shell/browser/media/media_device_id_salt.cc)
-  and [browser client](https://github.com/electron/electron/blob/v45.0.0-beta.1/shell/browser/electron_browser_client.cc):
-  the persistent session preference and salt selection remain unchanged.
-- [Chromium device-ID mapping](https://github.com/chromium/chromium/blob/156.0.8078.12/content/browser/media/media_devices_util.cc):
+- [Electron beta 3 notes](https://github.com/electron/electron/releases/tag/v45.0.0-beta.3):
+  interrupted macOS update installation no longer leaves a broken app.
+- [Electron beta 4 notes](https://github.com/electron/electron/releases/tag/v45.0.0-beta.4):
+  Chromium 156.0.8078.36, a macOS file-access fix, and recovery of `net.fetch`
+  after a Network Service restart. The heap-profiling change affects no GLKVM API.
+- [Electron beta 5 notes](https://github.com/electron/electron/releases/tag/v45.0.0-beta.5):
+  Chromium backports and Node.js 24.22.0.
+- [Electron media salt](https://github.com/electron/electron/blob/v45.0.0-beta.5/shell/browser/media/media_device_id_salt.cc)
+  and [browser client](https://github.com/electron/electron/blob/v45.0.0-beta.5/shell/browser/electron_browser_client.cc):
+  compared with beta 1, the salt file is identical and the browser-client changes
+  concern geolocation only. Persistent session salt selection is unchanged.
+- [Chromium device-ID mapping](https://github.com/chromium/chromium/blob/156.0.8078.36/content/browser/media/media_devices_util.cc)
+  and [CoreAudio UID lookup](https://github.com/chromium/chromium/blob/156.0.8078.36/media/audio/mac/core_audio_util_mac.cc)
+  are identical to 156.0.8078.12.
   HMAC-SHA256 still uses the serialized origin as key and raw UID followed by
   device salt as input. Default/communications IDs pass through.
-- [electron/notarize 3.1.2](https://github.com/electron/notarize/releases/tag/v3.1.2):
-  retries failed stapling. This is a build dependency.
-- `@types/node` 26.6.5 updates development type definitions only.
+- [undici 7.30.1 notes](https://github.com/nodejs/undici/releases/tag/v7.30.1):
+  security fixes for the transitive build-time HTTP client, including certificate
+  handling and bounded parser/buffer state. It is not shipped in the app.
 
 The signed device-ID GUI scenario and read-only real-device scenario validate
 the runtime pairing; they do not prove physical KVM sleep/wake acceptance.

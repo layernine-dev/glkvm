@@ -61,7 +61,7 @@ void (async () => {
   const requests = [];
   require('../src/main.cjs');
   try {
-    assert.ok(supportedRuntime(process.versions), `Mapping verified for Electron 45.0.0-beta.1 / Chromium 156.0.8078.12, running ${process.versions.electron} / ${process.versions.chrome}`);
+    assert.ok(supportedRuntime(process.versions), `Mapping verified for Electron 45.0.0-beta.5 / Chromium 156.0.8078.36, running ${process.versions.electron} / ${process.versions.chrome}`);
 
     // 1. Settings with zero connection windows lists every catalog device; the microphone stays disabled.
     await waitFor(() => BrowserWindow.getAllWindows().some(win => win.getTitle() === 'GLKVM Clean Settings'), 'settings at startup');
