@@ -17,6 +17,7 @@ const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./devic
 
 const { keyboardAction, matchesBinding } = require('./keyboard.cjs');
 const { setupUpdates } = require('./updates.cjs');
+const { setupShutdown } = require('./shutdown.cjs');
 /** @type {ReturnType<typeof setupUpdates>} */
 let updates = null;
 app.setName('GLKVM Clean');
@@ -81,6 +82,7 @@ function toggleMode(entry) {
 /** @returns {Map<string, () => void>} */
 function appShortcuts() {
   const shortcuts = new Map();
+  if (shutdown.isPreparing()) return shortcuts;
   const focused = BrowserWindow.getFocusedWindow();
   if (!focused) return shortcuts;
   shortcuts.set('CommandOrControl+W', () => {
@@ -175,6 +177,7 @@ function resizeWindow(entry, size, scale) {
 }
 /** @param {Electron.IpcMainEvent | Electron.IpcMainInvokeEvent} event */
 function deviceSender(event) {
+  if (shutdown.isPreparing()) return;
   return allEntries().find(entry => entry.window.webContents === event.sender && event.senderFrame === event.sender.mainFrame && isDeviceURL(event.senderFrame.url, entry.device));
 }
 
@@ -209,6 +212,7 @@ const catalogWatcher = watchCatalog(catalogPath(process.resourcesPath), devices 
 });
 /** The catalog runs only while settings or a connection window is open. */
 function updateCatalog() {
+  if (shutdown.isPreparing()) return;
   if (settingsWindow || windows.size) catalogWatcher.start(); else catalogWatcher.stop();
 }
 /** Reads the connection session's device ID salt (see device-ids.cjs); never written or logged.
@@ -328,6 +332,7 @@ function sendStartup(entry) {
 
 /** @param {Device} device @param {boolean} [consoleWindow] @param {boolean} [background] */
 function showDevice(device, consoleWindow = false, background = false) {
+  if (shutdown.isPreparing()) return;
   const collection = consoleWindow ? consoles : windows;
   const existing = collection.get(device.id);
   if (existing) {
@@ -448,7 +453,7 @@ function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
   const entry = showDevice(device);
-  setDeviceOptions(entry, !entry.options);
+  if (entry) setDeviceOptions(entry, !entry.options);
 }
 /** @param {Entry} entry @param {boolean} enabled */
 function setDeviceOptions(entry, enabled) {
@@ -478,6 +483,7 @@ function setDeviceOptions(entry, enabled) {
 }
 
 function showSettings() {
+  if (shutdown.isPreparing()) return;
   if (settingsWindow) { if (settingsWindow.isMinimized()) settingsWindow.restore(); settingsWindow.show(); settingsWindow.focus(); return; }
   settingsWindow = new BrowserWindow({
     title: 'GLKVM Clean Settings', width: 800, height: 660, minWidth: 620, minHeight: 500,
@@ -504,6 +510,7 @@ async function showChangelog() {
 }
 
 function installMenu() {
+  if (shutdown.isPreparing()) return;
   const entry = focusedEntry();
   const viewer = entry && windows.get(entry.device.id) === entry;
   const clean = viewer && !entry.options;
@@ -564,6 +571,7 @@ function installMenu() {
 
 /** @param {Electron.IpcMainInvokeEvent | Electron.IpcMainEvent} event */
 function requireSettingsSender(event) {
+  if (shutdown.isPreparing()) throw new Error('The application is quitting.');
   if (!settingsWindow || event.sender !== settingsWindow.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== settingsURL) throw new Error('Settings access denied.');
 }
 ipcMain.handle('glkvm:settings-load', event => { requireSettingsSender(event); migrateLegacyChoices(); return publicConfig(config); });
@@ -574,7 +582,9 @@ ipcMain.handle('glkvm:settings-save', async (event, value) => {
   savingSettings = true;
   try {
     const previous = config;
-    const next = writeConfig(configPath, await prepareConfig(value, previous, safeStorage));
+    const prepared = await prepareConfig(value, previous, safeStorage);
+    if (shutdown.isPreparing()) throw new Error('The application is quitting.');
+    const next = writeConfig(configPath, prepared);
     config = next;
     for (const entry of allEntries()) {
       if (entry.window.isDestroyed()) continue;
@@ -697,7 +707,7 @@ ipcMain.on('glkvm:login-required', event => {
   if (!entry.device.encryptedPassword) return;
   beginLogin(entry);
   const consoleEntry = showDevice(entry.device, true, true);
-  consoleEntry.window.webContents.send('glkvm:check-auth');
+  consoleEntry?.window.webContents.send('glkvm:check-auth');
 });
 ipcMain.on('glkvm:console-authenticated', event => {
   const consoleEntry = deviceSender(event);
@@ -784,8 +794,25 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
+const shutdown = setupShutdown({
+  app,
+  windows: () => BrowserWindow.getAllWindows(),
+  sessions: () => [session.defaultSession, ...[...configuredSessions].map(partition => session.fromPartition(partition))],
+  prepare: () => {
+    updates?.stop();
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: app.name, submenu: [{ role: 'quit' }] }]));
+    for (const entry of allEntries()) {
+      if (!entry.window.isDestroyed() && !entry.window.webContents.isDestroyed()) releaseInput(entry);
+      if (entry.loginTimer) clearTimeout(entry.loginTimer);
+      if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer);
+    }
+    catalogWatcher.stop();
+    globalShortcut.unregisterAll();
+    registeredShortcuts.clear();
+  },
+  quitAndInstall: () => autoUpdater.quitAndInstall(),
+});
 app.on('will-quit', () => { catalogWatcher.stop(); if (app.isReady()) globalShortcut.unregisterAll(); });
-app.on('before-quit', () => { for (const entry of allEntries()) releaseInput(entry); });
 
 app.on('certificate-error', (event, contents, url, error, certificate, callback) => {
   const entry = allEntries().find(({ window, device }) => window.webContents === contents && isDeviceURL(url, device));
@@ -816,13 +843,14 @@ app.on('certificate-error', (event, contents, url, error, certificate, callback)
 });
 
 function openStartupDevices() {
+  if (shutdown.isPreparing()) return;
   const startup = config.devices.filter(device => device.openAtStartup);
   startup.forEach(device => showDevice(device));
   if (!startup.length) showSettings();
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (windows.size) windows.values().next().value?.window.focus(); else openStartupDevices(); });
+  app.on('second-instance', () => { if (shutdown.isPreparing()) return; if (windows.size) windows.values().next().value?.window.focus(); else openStartupDevices(); });
   app.whenReady().then(async () => {
     // Refresh the running app's Dock icon independently of Launch Services caches.
     app.dock?.setIcon(path.join(__dirname, '../assets/icon.png'));
@@ -834,7 +862,7 @@ else {
       await dialog.showMessageBox({ type: 'error', message: 'Could not read saved settings', detail: `${error instanceof Error ? error.message : String(error)}\n\nThe original file has been preserved at ${configPath}. The default connections will be shown until you save settings again.` });
     }
     screen.on('display-metrics-changed', installMenu);
-    updates = setupUpdates({ app, autoUpdater, dialog, manifest: require('../package.json'), releaseInput: () => { for (const entry of allEntries()) releaseInput(entry); } });
+    updates = setupUpdates({ app, autoUpdater, dialog, manifest: require('../package.json'), releaseInput: () => { for (const entry of allEntries()) releaseInput(entry); }, quitAndInstall: () => shutdown.quitAndInstall() });
     installMenu(); openStartupDevices();
     app.on('activate', () => { if (!windows.size && !settingsWindow && !consoles.size) openStartupDevices(); });
   });
