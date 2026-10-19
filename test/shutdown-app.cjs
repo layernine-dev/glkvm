@@ -14,6 +14,13 @@ let socketOpened = false;
 let socketClosed = false;
 let cleanupCalls = 0;
 let cleanupComplete = false;
+const deadline = setTimeout(() => {
+  console.error('Quit did not finish after the cleanup deadline.');
+  fs.rmSync(directory, { recursive: true, force: true });
+  server.closeAllConnections();
+  server.close();
+  app.exit(1);
+}, 15000);
 const server = createServer((_req, res) => {
   res.setHeader('content-type', 'text/html');
   res.end('<!doctype html><title>Shutdown fixture</title>');
@@ -43,11 +50,17 @@ server.listen(0, '127.0.0.1', async () => {
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     const origin = `http://127.0.0.1:${address.port}`;
-    const connection = new BrowserWindow({ show: false, webPreferences: { partition: 'shutdown-connection', sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    const connection = new BrowserWindow({ show: true, frame: false, roundedCorners: false, hasShadow: false, webPreferences: { partition: 'shutdown-connection', sandbox: true, contextIsolation: true, nodeIntegration: false } });
     // This test-only remote peer stays alive during the drain so it can
     // confirm that the connection's real WebRTC transport was disconnected.
     const remote = new BrowserWindow({ show: false, webPreferences: { partition: 'shutdown-observer', sandbox: true, contextIsolation: true, nodeIntegration: false } });
     await Promise.all([connection.loadURL(origin), remote.loadURL(origin)]);
+    const stalled = new BrowserWindow({ show: false, webPreferences: { partition: 'shutdown-stalled', sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    await stalled.loadURL(origin);
+    await stalled.webContents.executeJavaScript("window.addEventListener('beforeunload', () => { while (true) {} });");
+    // A successful about:blank drain is not proof that a subsequent native
+    // close handshake will finish. Reproduce that final close veto too.
+    connection.on('close', event => event.preventDefault());
     /** @param {Electron.BrowserWindow} win @param {string} code */
     const run = (win, code) => win.webContents.executeJavaScript(code);
     await run(connection, `window.pc = new RTCPeerConnection({iceServers: []}); window.channel = pc.createDataChannel('shutdown'); window.socket = new WebSocket('${origin.replace('http:', 'ws:')}'); window.addEventListener('beforeunload', event => { event.returnValue = false; });`);
@@ -68,14 +81,16 @@ server.listen(0, '127.0.0.1', async () => {
       assert.equal(await run(remote, `channel.readyState`), 'closed', 'The remote WebRTC channel has closed without a fixture delay');
       cleanupComplete = true;
     };
-    setupShutdown({ app, windows: () => [connection], sessions: () => [ses, ses], prepare: () => {}, quitAndInstall: () => { throw new Error('Ordinary Quit must not install updates.'); } });
+    setupShutdown({ app, windows: () => [connection, stalled], sessions: () => [ses, ses], prepare: () => {}, quitAndInstall: () => { throw new Error('Ordinary Quit must not install updates.'); } });
     app.once('will-quit', event => {
       event.preventDefault();
       try {
         assert.equal(cleanupCalls, 1, 'Repeated Quit and shared sessions run cleanup once');
         assert.equal(cleanupComplete, true, 'The live WebRTC transport and session finish cleanup before native shutdown');
         assert.equal(socketClosed, true, 'The WebSocket is closed before native shutdown');
-        console.log('PASS: Quit unloads a live WebRTC/WebSocket page despite beforeunload, drains shared sessions once, and handles repeated Quit');
+        assert.equal(stalled.isDestroyed(), true, 'An unresponsive beforeunload cannot cancel Quit after the deadline');
+        clearTimeout(deadline);
+        console.log('PASS: Quit drains live WebRTC/WebSocket transports, bounds an unresponsive renderer, destroys drained frameless windows without another close handshake, and handles repeated Quit');
         fs.rmSync(directory, { recursive: true, force: true });
         server.close();
         app.exit(0);

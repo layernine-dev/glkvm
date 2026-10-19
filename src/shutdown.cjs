@@ -59,7 +59,14 @@ function setupShutdown({ app, windows, sessions, prepare, quitAndInstall }) {
       console.warn('Could not prepare network shutdown:', error instanceof Error ? error.message : String(error));
     }).finally(() => {
       prepared = true;
-      if (installing) quitAndInstall(); else app.quit();
+      // The documents have been unloaded (or their deadline expired). Do not
+      // enter another renderer close handshake: it can still veto or stall
+      // native Quit even after a successful navigation to about:blank.
+      for (const win of windows()) {
+        if (!win.isDestroyed()) win.destroy();
+      }
+      // Leave the native event callback before requesting the final Quit.
+      setImmediate(() => { if (installing) quitAndInstall(); else app.quit(); });
     });
   }
 

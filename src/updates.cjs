@@ -9,12 +9,14 @@ function updatesEnabled(manifest, packaged, platform, arch) {
 }
 
 /** @param {{app: Electron.App, autoUpdater: Electron.AutoUpdater, dialog: Electron.Dialog,
- * manifest: UpdateManifest, releaseInput: () => void, quitAndInstall: () => void}} options
+ * manifest: UpdateManifest, releaseInput: () => void, quitAndInstall: () => void,
+ * progress: {show: (message: string) => void, update: (message: string) => void, close: () => void}}} options
  */
-function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput, quitAndInstall }) {
+function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput, quitAndInstall, progress }) {
   if (!updatesEnabled(manifest, app.isPackaged, process.platform, process.arch)) return null;
   const { updateElectronApp } = require('update-electron-app');
   let busy = false;
+  let downloading = false;
   let manual = false;
   let downloaded = false;
   let notes = '';
@@ -35,18 +37,25 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput, quitAn
     } finally { prompting = false; }
   }
   autoUpdater.on('checking-for-update', () => { busy = true; });
+  autoUpdater.on('update-available', () => {
+    downloading = true;
+    if (manual && !stopping) progress.update('Downloading update…');
+  });
   autoUpdater.on('update-not-available', () => {
-    busy = false;
+    busy = false; downloading = false;
+    progress.close();
     if (manual && !stopping) void dialog.showMessageBox({ type: 'info', message: 'GLKVM Clean is up to date.', detail: `Version ${app.getVersion()}` });
     manual = false;
   });
   autoUpdater.on('error', () => {
-    busy = false;
+    busy = false; downloading = false;
+    progress.close();
     if (manual && !stopping) void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.', detail: 'Please try again later.' });
     manual = false;
   });
   autoUpdater.on('update-downloaded', (_event, releaseNotes, name) => {
-    busy = false; manual = false; downloaded = true;
+    busy = false; downloading = false; manual = false; downloaded = true;
+    progress.close();
     notes = plainReleaseNotes(releaseNotes);
     releaseName = typeof name === 'string' ? name.slice(0, 200) : '';
     stopUpdates();
@@ -63,15 +72,19 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput, quitAn
   stopUpdates = updater.stopUpdates;
   app.on('will-quit', stopUpdates);
   return {
-    stop() { stopping = true; manual = false; stopUpdates(); },
+    stop() { stopping = true; manual = false; progress.close(); stopUpdates(); },
     check() {
       if (stopping) return;
       if (downloaded) {
         void promptUpdate();
-      } else if (!busy) {
+      } else {
+        // A manual request joins the automatic check instead of disappearing.
         manual = true;
+        progress.show(downloading ? 'Downloading update…' : 'Checking for updates…');
+        if (busy) return;
+        busy = true;
         try { autoUpdater.checkForUpdates(); }
-        catch { busy = false; manual = false; void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.' }); }
+        catch { busy = false; manual = false; progress.close(); void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.' }); }
       }
     },
   };

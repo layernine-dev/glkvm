@@ -7,11 +7,12 @@ test('a stalled renderer or network service cannot indefinitely veto Quit', asyn
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const warnings = t.mock.method(console, 'warn', () => {});
   let quits = 0;
+  let destroyed = 0;
   const app = Object.assign(new EventEmitter(), { isReady: () => true, quit: () => { quits++; } });
   const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, stop: () => {}, loadURL: () => new Promise(() => {}) });
   setupShutdown({
     app: /** @type {any} */ (app),
-    windows: () => [/** @type {any} */ ({ isDestroyed: () => false, webContents: contents })],
+    windows: () => [/** @type {any} */ ({ isDestroyed: () => false, webContents: contents, destroy: () => { destroyed++; } })],
     sessions: () => [/** @type {any} */ ({ closeAllConnections: () => new Promise(() => {}) })],
     prepare: () => {}, quitAndInstall: () => assert.fail('Unexpected update restart'),
   });
@@ -25,7 +26,9 @@ test('a stalled renderer or network service cannot indefinitely veto Quit', asyn
   assert.equal(quits, 0);
   t.mock.timers.tick(3000);
   await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(quits, 1, 'Quit continues after both cleanup deadlines');
+  assert.equal(destroyed, 1, 'A stalled window cannot start another close handshake');
   assert.equal(warnings.mock.callCount(), 2);
 });
 
@@ -51,6 +54,7 @@ test('a failed session does not skip other session cleanup or an update restart'
   assert.equal(prepared, 1);
   assert.equal(restarts, 0, 'The failed first session does not skip the pending second one');
   finish();
+  await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(restarts, 1);
 });
