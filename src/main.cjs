@@ -332,6 +332,7 @@ function sendStartup(entry) {
 
 /** @param {Device} device @param {boolean} [consoleWindow] @param {boolean} [background] */
 function showDevice(device, consoleWindow = false, background = false) {
+  if (shutdown.isPreparing()) return;
   const collection = consoleWindow ? consoles : windows;
   const existing = collection.get(device.id);
   if (existing) {
@@ -452,7 +453,7 @@ function toggleDeviceSettings() {
   const device = currentDevice();
   if (!device) return;
   const entry = showDevice(device);
-  setDeviceOptions(entry, !entry.options);
+  if (entry) setDeviceOptions(entry, !entry.options);
 }
 /** @param {Entry} entry @param {boolean} enabled */
 function setDeviceOptions(entry, enabled) {
@@ -706,7 +707,7 @@ ipcMain.on('glkvm:login-required', event => {
   if (!entry.device.encryptedPassword) return;
   beginLogin(entry);
   const consoleEntry = showDevice(entry.device, true, true);
-  consoleEntry.window.webContents.send('glkvm:check-auth');
+  consoleEntry?.window.webContents.send('glkvm:check-auth');
 });
 ipcMain.on('glkvm:console-authenticated', event => {
   const consoleEntry = deviceSender(event);
