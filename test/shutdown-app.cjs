@@ -63,9 +63,9 @@ server.listen(0, '127.0.0.1', async () => {
     ses.closeAllConnections = async () => {
       cleanupCalls++;
       assert.equal(connection.webContents.getURL(), 'about:blank', 'The connection document is gone before the session is drained');
-      await waitFor(() => socketClosed);
-      await waitFor(() => run(remote, `channel.readyState === 'closed'`));
       await nativeClose();
+      assert.equal(socketClosed, true, 'Session cleanup completes after the WebSocket disconnects');
+      assert.equal(await run(remote, `channel.readyState`), 'closed', 'The remote WebRTC channel has closed without a fixture delay');
       cleanupComplete = true;
     };
     setupShutdown({ app, windows: () => [connection], sessions: () => [ses, ses], prepare: () => {}, quitAndInstall: () => { throw new Error('Ordinary Quit must not install updates.'); } });
