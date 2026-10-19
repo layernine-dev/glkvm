@@ -17,7 +17,8 @@ test('only explicitly marked release bundles can contact the update service', ()
 
 test('manual checks avoid duplicate downloads, report errors, and release input on update quit', async () => {
   const loaded = { exports: /** @type {any} */ ({}) };
-  let stopped = 0, checks = 0, released = 0, restarts = 0;
+  let stopped = 0, checks = 0, released = 0, restarts = 0, preparedRestarts = 0;
+  let response = 1;
   /** @type {any[]} */
   const messages = [];
   const app = Object.assign(new EventEmitter(), { isPackaged: true, getVersion: () => '0.1.22' });
@@ -29,7 +30,7 @@ test('manual checks avoid duplicate downloads, report errors, and release input 
     module: loaded, process: { platform: 'darwin', arch: 'arm64' },
     require: (/** @type {string} */ name) => name === './release-notes.cjs' ? require('../src/release-notes.cjs') : ({ UpdateSourceType: { ElectronPublicUpdateService: 0 }, updateElectronApp: () => ({ stopUpdates: () => { stopped++; } }) }),
   });
-  const updates = loaded.exports.setupUpdates({ app, autoUpdater, manifest: { glkvmUpdates: true }, releaseInput: () => { released++; }, dialog: { showMessageBox: async (/** @type {any} */ options) => { messages.push(options); return { response: 1 }; } } });
+  const updates = loaded.exports.setupUpdates({ app, autoUpdater, manifest: { glkvmUpdates: true }, releaseInput: () => { released++; }, quitAndInstall: () => { preparedRestarts++; }, dialog: { showMessageBox: async (/** @type {any} */ options) => { messages.push(options); return { response }; } } });
   updates.check(); updates.check();
   assert.equal(checks, 1, 'No concurrent manual download');
   autoUpdater.emit('error', new Error('offline'));
@@ -50,4 +51,14 @@ test('manual checks avoid duplicate downloads, report errors, and release input 
   assert.equal(restarts, 0, 'Later never interrupts a session');
   autoUpdater.emit('before-quit-for-update');
   assert.equal(released, 1);
+  response = 0;
+  updates.check(); await Promise.resolve();
+  assert.equal(preparedRestarts, 1, 'Restart requests the application network drain first');
+  assert.equal(restarts, 0, 'The updater cannot close windows before network cleanup');
+  updates.stop();
+  const count = messages.length;
+  updates.check();
+  autoUpdater.emit('update-downloaded', {}, 'Late update', 'New version');
+  await Promise.resolve();
+  assert.equal(messages.length, count, 'Shutdown stops checks and suppresses late update prompts');
 });

@@ -9,9 +9,9 @@ function updatesEnabled(manifest, packaged, platform, arch) {
 }
 
 /** @param {{app: Electron.App, autoUpdater: Electron.AutoUpdater, dialog: Electron.Dialog,
- * manifest: UpdateManifest, releaseInput: () => void}} options
+ * manifest: UpdateManifest, releaseInput: () => void, quitAndInstall: () => void}} options
  */
-function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
+function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput, quitAndInstall }) {
   if (!updatesEnabled(manifest, app.isPackaged, process.platform, process.arch)) return null;
   const { updateElectronApp } = require('update-electron-app');
   let busy = false;
@@ -20,9 +20,10 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
   let notes = '';
   let releaseName = '';
   let prompting = false;
+  let stopping = false;
   let stopUpdates = () => {};
   async function promptUpdate() {
-    if (prompting) return;
+    if (prompting || stopping) return;
     prompting = true;
     try {
       const { response } = await dialog.showMessageBox({
@@ -30,18 +31,18 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
         detail: `Restart GLKVM Clean to install it.\n\nWhat's changed\n\n${notes || 'Release notes are unavailable for this version.'}`,
         buttons: ['Restart', 'Later'], defaultId: 1, cancelId: 1,
       });
-      if (response === 0) autoUpdater.quitAndInstall();
+      if (response === 0 && !stopping) quitAndInstall();
     } finally { prompting = false; }
   }
   autoUpdater.on('checking-for-update', () => { busy = true; });
   autoUpdater.on('update-not-available', () => {
     busy = false;
-    if (manual) void dialog.showMessageBox({ type: 'info', message: 'GLKVM Clean is up to date.', detail: `Version ${app.getVersion()}` });
+    if (manual && !stopping) void dialog.showMessageBox({ type: 'info', message: 'GLKVM Clean is up to date.', detail: `Version ${app.getVersion()}` });
     manual = false;
   });
   autoUpdater.on('error', () => {
     busy = false;
-    if (manual) void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.', detail: 'Please try again later.' });
+    if (manual && !stopping) void dialog.showMessageBox({ type: 'error', message: 'Could not check for updates.', detail: 'Please try again later.' });
     manual = false;
   });
   autoUpdater.on('update-downloaded', (_event, releaseNotes, name) => {
@@ -62,7 +63,9 @@ function setupUpdates({ app, autoUpdater, dialog, manifest, releaseInput }) {
   stopUpdates = updater.stopUpdates;
   app.on('will-quit', stopUpdates);
   return {
+    stop() { stopping = true; manual = false; stopUpdates(); },
     check() {
+      if (stopping) return;
       if (downloaded) {
         void promptUpdate();
       } else if (!busy) {
