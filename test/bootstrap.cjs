@@ -1,4 +1,5 @@
 const { app } = require('electron');
+require('../src/network-runtime.cjs').configureNetworkRuntime(app);
 const path = require('node:path');
 require('./runtime.cjs');
 

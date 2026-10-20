@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { setupShutdown } = require('../src/shutdown.cjs');
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-shutdown-'));
@@ -51,6 +52,10 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(address && typeof address !== 'string');
     const origin = `http://127.0.0.1:${address.port}`;
     const connection = new BrowserWindow({ show: true, frame: false, roundedCorners: false, hasShadow: false, webPreferences: { partition: 'shutdown-connection', sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    // Match the product's default: microphone/camera access is not a
+    // prerequisite for receiving video or using WebRTC data channels.
+    connection.webContents.session.setPermissionCheckHandler(() => false);
+    connection.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     // This test-only remote peer stays alive during the drain so it can
     // confirm that the connection's real WebRTC transport was disconnected.
     const remote = new BrowserWindow({ show: false, webPreferences: { partition: 'shutdown-observer', sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -71,6 +76,15 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => run(connection, `channel.readyState === 'open' && socket.readyState === WebSocket.OPEN`));
     await waitFor(() => run(remote, `window.channel?.readyState === 'open'`));
     assert.equal(socketOpened, true);
+    const pids = app.getAppMetrics().map(metric => metric.pid);
+    assert.ok(pids.length > 2, 'Track the real network/renderer/GPU helpers');
+    console.log(`GLKVM_SHUTDOWN_PROCESSES ${JSON.stringify(pids)}`);
+    // Check the OS socket table, not just a command-line flag or ICE SDP:
+    // Chromium creates its responder even when media permission allows raw IPs.
+    const sockets = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', pids.join(','), '-iUDP:5353', '-F', 'pn'], { encoding: 'utf8', timeout: 5000 });
+    assert.ok(sockets.status === 0 || sockets.status === 1, sockets.error?.message || sockets.stderr);
+    assert.equal(sockets.stderr, '');
+    assert.equal(sockets.stdout, '', 'Live WebRTC must not create Chromium mDNS responder sockets');
     const ses = connection.webContents.session;
     const nativeClose = ses.closeAllConnections.bind(ses);
     ses.closeAllConnections = async () => {
@@ -82,18 +96,18 @@ server.listen(0, '127.0.0.1', async () => {
       cleanupComplete = true;
     };
     setupShutdown({ app, windows: () => [connection, stalled], sessions: () => [ses, ses], prepare: () => {}, quitAndInstall: () => { throw new Error('Ordinary Quit must not install updates.'); } });
-    app.once('will-quit', event => {
-      event.preventDefault();
+    app.once('will-quit', () => {
       try {
         assert.equal(cleanupCalls, 1, 'Repeated Quit and shared sessions run cleanup once');
         assert.equal(cleanupComplete, true, 'The live WebRTC transport and session finish cleanup before native shutdown');
         assert.equal(socketClosed, true, 'The WebSocket is closed before native shutdown');
         assert.equal(stalled.isDestroyed(), true, 'An unresponsive beforeunload cannot cancel Quit after the deadline');
         clearTimeout(deadline);
-        console.log('PASS: Quit drains live WebRTC/WebSocket transports, bounds an unresponsive renderer, destroys drained frameless windows without another close handshake, and handles repeated Quit');
+        console.log('PASS: Quit drains live WebRTC/WebSocket transports without mDNS responder sockets and reaches native shutdown');
         fs.rmSync(directory, { recursive: true, force: true });
         server.close();
-        app.exit(0);
+        // Let native Chromium teardown finish. The external runner verifies
+        // actual exit of this process AND every recorded helper, then reopens.
       } catch (error) { console.error(error); app.exit(1); }
     });
     app.quit();
