@@ -9,8 +9,13 @@ async function main() {
   }
   const appPath = await buildApp({ tests: tests.length > 0 });
   const executable = path.join(appPath, 'Contents/MacOS/GLKVM Clean');
-  for (const test of tests.length ? tests : [null]) {
-    const child = spawn(executable, test ? [`--glkvm-test=${test}`] : [], { stdio: 'inherit' });
+  // Reopen after each complete native teardown. A will-quit callback alone
+  // cannot prove that Chromium and its network service actually exited.
+  const scenarios = (tests.length ? tests : [null]).flatMap(test => test === 'shutdown-app' ? [test, test, test] : [test]);
+  for (const test of scenarios) {
+    let shutdownOutput = '';
+    const child = spawn(executable, test ? [`--glkvm-test=${test}`] : [], { stdio: test === 'shutdown-app' ? ['inherit', 'pipe', 'inherit'] : 'inherit' });
+    child.stdout?.on('data', chunk => { process.stdout.write(chunk); shutdownOutput += chunk; });
     const timer = test ? setTimeout(() => {
       console.error(`GUI test timed out: ${test}`);
       child.kill('SIGKILL');
@@ -21,6 +26,18 @@ async function main() {
         child.once('exit', resolve);
       });
       if (code !== 0) throw new Error(`${test || 'App'} exited with code ${code}.`);
+      if (test === 'shutdown-app') {
+        const match = shutdownOutput.match(/^GLKVM_SHUTDOWN_PROCESSES (\[[\d,]+\])$/m);
+        if (!match || !shutdownOutput.includes('PASS: Quit drains')) throw new Error('Shutdown assertions did not complete.');
+        const pids = /** @type {number[]} */ (JSON.parse(match[1]));
+        const alive = () => pids.filter(pid => {
+          try { process.kill(pid, 0); return true; }
+          catch (error) { if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ESRCH') return false; throw error; }
+        });
+        for (let i = 0; i < 50 && alive().length; i++) await new Promise(resolve => setTimeout(resolve, 100));
+        if (alive().length) throw new Error(`Shutdown left processes alive: ${alive().join(', ')}`);
+        console.log('PASS: Main process and all helpers exited; the signed bundle can reopen.');
+      }
     } finally { if (timer) clearTimeout(timer); }
   }
 }

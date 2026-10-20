@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session, safeStorage, globalShortcut, clipboard, systemPreferences, autoUpdater, shell } = require('electron');
+require('./network-runtime.cjs').configureNetworkRuntime(app);
 if (process.platform === 'darwin' && !app.isPackaged) {
   console.error('Use bun start to run the signed GLKVM app. Generic Electron cannot access app credentials.');
   app.exit(1);

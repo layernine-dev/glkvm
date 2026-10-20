@@ -1,6 +1,6 @@
-/** Unload connection pages and drain their sessions while Chromium's network
- * service is still alive. Killing that service with live sockets leaves their
- * cleanup to process exit, where macOS content filtering can block shutdown.
+/** Unload connection pages and drain HTTP pools while the network service is
+ * alive. WebRTC mDNS sockets outlive pages and HTTP pools; their macOS shutdown
+ * workaround is applied before startup in network-runtime.cjs.
  * @param {{app: Electron.App, windows: () => Electron.BrowserWindow[],
  * sessions: () => Electron.Session[], prepare: () => void,
  * quitAndInstall: () => void}} options
