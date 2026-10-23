@@ -796,6 +796,11 @@ ipcMain.on('glkvm:video-size', (event, size) => {
 
 app.on('browser-window-focus', () => updateModeShortcuts());
 app.on('browser-window-blur', () => setImmediate(updateModeShortcuts));
+// Closing the focused window does not always emit blur on macOS. Release its
+// global shortcuts after destruction so they cannot swallow windowless menu commands.
+app.on('browser-window-created', (_event, win) => {
+  win.on('closed', () => setImmediate(updateModeShortcuts));
+});
 const shutdown = setupShutdown({
   app,
   windows: () => BrowserWindow.getAllWindows(),

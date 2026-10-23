@@ -40,10 +40,9 @@ jobs:
           fi
           : "${GLKVM_TEST_LOCK:?Configure the runner lock path repository secret}"
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-          export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export PATH="$HOME/.local/share/mise/shims:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           export CMAKE_BUILD_PARALLEL_LEVEL=2
           caffeinate -d -i -u python3 "$GLKVM_TEST_LOCK" /bin/zsh -e -c '
-            eval "$(fnm env --shell zsh)"
             bun install --frozen-lockfile
             bun run check
             bun run test
@@ -76,10 +75,9 @@ jobs:
         run: |
           : "${GLKVM_TEST_LOCK:?Configure the runner lock path repository secret}"
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-          export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export PATH="$HOME/.local/share/mise/shims:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           export CMAKE_BUILD_PARALLEL_LEVEL=2
           caffeinate -d -i -u python3 "$GLKVM_TEST_LOCK" /bin/zsh -e -c '
-            eval "$(fnm env --shell zsh)"
             bun install --frozen-lockfile
             release_status=0
             node scripts/release.cjs published || release_status=$?

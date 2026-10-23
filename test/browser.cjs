@@ -79,6 +79,9 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'B' });
     win.webContents.sendInputEvent({ type: 'mouseDown', x: 480, y: 270, button: 'left', clickCount: 1 });
     win.webContents.sendInputEvent({ type: 'mouseUp', x: 480, y: 270, button: 'left', clickCount: 1 });
+    // Native mouse input is queued until a frame. Let the view-only click
+    // finish before enabling control, or it can arrive in the next mode.
+    await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     assert.equal(await win.webContents.executeJavaScript('window.inputEvents'), 0);
     assert.equal(await win.webContents.executeJavaScript('window.mouseEvents'), 0);
     await mode(true);
