@@ -41,6 +41,10 @@ async function buildApp({ tests = false, release = false, appVersion = version }
     buildVersion: appVersion,
     platform: 'darwin', arch: 'arm64',
     overwrite: true, asar: true, extraResource: [catalog],
+    // Verify the runtime zip against the checksums shipped in the locked electron
+    // package. Without them, @electron/get re-fetches SHASUMS256.txt from GitHub on
+    // every build (bypassing its cache), so a cached zip still needs the network.
+    download: { checksums: require('electron/checksums.json') },
     afterExtract: [({ buildPath }) => {
       preserveElectronLicenses(buildPath);
       personalizeExecutables(buildPath, 'dev.layernine.glkvm-clean');
