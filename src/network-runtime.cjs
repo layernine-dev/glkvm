@@ -8,9 +8,9 @@ function configureNetworkRuntime(app) {
   // stall inside guarded_close_np, blocking the network service and configd.
   // Unloading pages / closeAllConnections cannot close these UDP sockets:
   // their manager lives until its NetworkContext is destroyed.
-  // Chromium 156: PeerConnectionDependencyFactory::CreatePeerConnectionFactory
+  // Chromium 156 (unchanged through 156.0.8078.80): PeerConnectionDependencyFactory::CreatePeerConnectionFactory
   // gates MdnsResponderAdapter creation on WebRtcHideLocalIpsWithMdns:
-  // https://github.com/chromium/chromium/blob/156.0.8078.36/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc#L795-L803
+  // https://github.com/chromium/chromium/blob/156.0.8078.80/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc#L795-L803
   const disabled = new Set(app.commandLine.getSwitchValue('disable-features').split(',').filter(Boolean));
   disabled.add('WebRtcHideLocalIpsWithMdns');
   app.commandLine.appendSwitch('disable-features', [...disabled].join(','));
