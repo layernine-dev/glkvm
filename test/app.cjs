@@ -230,7 +230,7 @@ server.listen(0, '127.0.0.1', async () => {
       clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'O', modifiers: ['meta', 'shift'] });
       await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
       assert.equal(await clean.webContents.executeJavaScript("getComputedStyle(document.querySelector('#toolbar')).visibility"), 'visible');
-      assert.equal(clean.hasShadow(), true);
+      assert.equal(clean.hasShadow(), false, 'Device settings add no native shadow');
       assert.equal(await clean.webContents.executeJavaScript("document.querySelectorAll('#glkvm-title-bar button').length"), 3);
       assert.equal(clean.id, originalId);
       assert.equal(clean.webContents.id, originalContents);
@@ -318,7 +318,7 @@ server.listen(0, '127.0.0.1', async () => {
     assert.ok(reopened);
     await waitFor(() => !reopened.webContents.isLoading());
     await waitFor(() => reopened.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
-    assert.equal(reopened.hasShadow(), true);
+    assert.equal(reopened.hasShadow(), false);
     assert.equal(await reopened.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar span').textContent"), 'Renamed');
     await waitFor(() => reopened.webContents.executeJavaScript("document.querySelector('video')?.videoWidth === 640"));
     await waitFor(() => !BrowserWindow.getAllWindows().some(win => win.getTitle().endsWith('— Device Settings')));

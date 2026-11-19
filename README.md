@@ -161,9 +161,6 @@ connection. Meeting mode lasts until it is turned off or the app quits.
   focused, so the meeting app captures it as usual.
 - All other connection windows draw at most two frames per second. They stay
   connected; audio, input and their status continue.
-- Window shadows are off. On macOS, WindowServer redraws the shadow of these
-  square-cornered windows continuously. With two 1080p windows shown in device
-  settings mode on an M3 Max, the shadows cost more GPU time than both videos.
 
 Frame limits apply to WebRTC video. The device still sends and the Mac still
 decodes every frame; only drawing is limited. The device's `desired_fps` setting
@@ -315,8 +312,10 @@ handlers and coordinates. View-only and move modes block remote input. Focus los
 mode changes, and disconnects release tracked keys and mouse buttons.
 
 The device interface is revealed in place by disabling the clean-view CSS and
-input gate. Window buttons, a draggable title bar, and the shadow appear
-only in this mode (no shadow in meeting mode). A hidden helper using the same session handles saved-password
+input gate. Window buttons and a draggable title bar appear only in this mode.
+Device windows never have a native shadow: WindowServer redraws the shadow of
+these square-cornered windows continuously, and with two 1080p windows on an
+M3 Max the shadows cost more GPU time than both videos. A hidden helper using the same session handles saved-password
 sign-in and closes when authenticated; it is never the visible settings surface.
 
 The adapter targets the observed GLKVM 1.10.1 release3 DOM (`#stream-window`,

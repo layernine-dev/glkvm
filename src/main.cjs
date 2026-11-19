@@ -43,8 +43,7 @@ let lastDeviceId = '';
 let audioSwitchingPaused = false;
 /** Meeting mode is app-wide and in memory only, like paused audio switching. The shared connection
  * (chosen when meeting mode starts) and the focused one draw at most meetingFrameRate; every other
- * viewer at most idleFrameRate. Window shadows are off: WindowServer redraws the shadow of these
- * square-cornered windows continuously, which costs far more GPU time than the video itself. */
+ * viewer at most idleFrameRate. */
 let meetingMode = false;
 /** @type {string | null} */
 let meetingShared = null;
@@ -218,11 +217,10 @@ function frameRateFor(entry) {
   if (!meetingMode || !isViewer(entry)) return null;
   return entry.device.id === meetingShared || isForeground(entry) ? meetingFrameRate : idleFrameRate;
 }
-/** Applies meeting mode to every viewer: frame rate limits, background pause and window shadows. */
+/** Applies meeting mode to every viewer: frame rate limits and the background pause. */
 function syncVideo() {
   for (const entry of windows.values()) {
     if (entry.window.isDestroyed()) continue;
-    entry.window.setHasShadow(entry.options && !meetingMode);
     entry.window.webContents.send('glkvm:background-video', pausesVideo(entry));
     entry.window.webContents.send('glkvm:frame-rate', frameRateFor(entry));
   }
@@ -410,6 +408,9 @@ function showDevice(device, consoleWindow = false, background = false) {
     title: consoleWindow ? `${device.name} — Device Settings` : device.name,
     width, height, x: work.x + 40 + (windows.size % 5) * 40, y: work.y + 40 + (windows.size % 5) * 40,
     minWidth: consoleWindow ? 720 : 160, minHeight: consoleWindow ? 500 : 90,
+    // Device windows never get a native shadow, also with device settings shown: macOS WindowServer
+    // redraws the shadow of these square-cornered windows continuously, which cost more GPU time
+    // than two 1080p60 videos (M3 Max, 5K display).
     frame: consoleWindow, roundedCorners: consoleWindow, hasShadow: consoleWindow,
     backgroundColor: '#000000', show: false,
     webPreferences: {
@@ -524,7 +525,6 @@ function setDeviceOptions(entry, enabled) {
     if (entry.cleanBounds && !win.isFullScreen()) win.setBounds(entry.cleanBounds);
     if (entry.videoSize) win.setAspectRatio(entry.videoSize.width / entry.videoSize.height);
   }
-  win.setHasShadow(entry.options && !meetingMode);
   sendMode(entry);
   win.webContents.focus();
   installMenu();
@@ -615,7 +615,7 @@ function installMenu() {
       { role: 'togglefullscreen' }, { type: 'separator' }, { role: 'front' },
     ] },
     { label: 'Help', submenu: [{ label: 'Using GLKVM Clean', click: () => {
-      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. The Pause Audio Switching shortcut (⇧⌘A by default, set in Settings → Keyboard) keeps each connection on its current focused or background audio until you press it again. Meeting Mode (⇧⌘E by default) lowers GPU and CPU load while you share a window: the window focused when it starts stays shared at up to 30 fps, the focused window also gets 30 fps, other windows update twice per second, and window shadows are off. No screen-sharing session is started by this app.' });
+      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. The Pause Audio Switching shortcut (⇧⌘A by default, set in Settings → Keyboard) keeps each connection on its current focused or background audio until you press it again. Meeting Mode (⇧⌘E by default) lowers GPU and CPU load while you share a window: the window focused when it starts stays shared at up to 30 fps, the focused window also gets 30 fps, and other windows update twice per second. No screen-sharing session is started by this app.' });
     } }] },
   ]));
 }
