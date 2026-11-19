@@ -16,7 +16,7 @@ const { defaultAudio, resolveDevice, routeFor, mediaPermission, validateDeviceRe
 const { watchCatalog, catalogPath, deviceLabels } = require('./audio-catalog.cjs');
 const { browserDeviceId, readDeviceIdSalt, supportedRuntime } = require('./device-ids.cjs');
 
-const { keyboardAction, matchesBinding } = require('./keyboard.cjs');
+const { appActions, keyboardAction, matchesBinding } = require('./keyboard.cjs');
 const { setupUpdates } = require('./updates.cjs');
 const { createUpdateProgress } = require('./update-progress.cjs');
 const { setupShutdown } = require('./shutdown.cjs');
@@ -41,6 +41,15 @@ let settingsWindow = null;
 let lastDeviceId = '';
 /** Paused audio switching is app-wide and in memory only, so it ends with the process. */
 let audioSwitchingPaused = false;
+/** Meeting mode is app-wide and in memory only, like paused audio switching. The shared connection
+ * (chosen when meeting mode starts) and the focused one draw at most meetingFrameRate; every other
+ * viewer at most idleFrameRate. Window shadows are off: WindowServer redraws the shadow of these
+ * square-cornered windows continuously, which costs far more GPU time than the video itself. */
+let meetingMode = false;
+/** @type {string | null} */
+let meetingShared = null;
+const meetingFrameRate = 30;
+const idleFrameRate = 2;
 let settingsRecording = false;
 const settingsURL = pathToFileURL(path.join(__dirname, 'settings.html')).href;
 
@@ -52,7 +61,7 @@ function focusedEntry() {
 function currentDevice() { return focusedEntry()?.device || config.devices.find(device => device.id === lastDeviceId) || config.devices[0]; }
 /** @param {Entry} entry */
 function sendMode(entry) {
-  entry.window.webContents.send('glkvm:mode', { pauseBackgroundVideo: config.experimentalPauseBackgroundVideo === true && isViewer(entry) && !isForeground(entry), controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
+  entry.window.webContents.send('glkvm:mode', { pauseBackgroundVideo: pausesVideo(entry), maxFrameRate: frameRateFor(entry), controlEnabled: entry.controlEnabled, moving: entry.moving, options: entry.options, keyboard: config.keyboard, videoPoints: entry.options && entry.selectedScale != null && entry.videoSize ? windowSize(entry.videoSize, entry.selectedScale, screen.getDisplayMatching(entry.window.getBounds()).workArea, screen.getDisplayMatching(entry.window.getBounds()).scaleFactor) : null, name: entry.device.name, loginStatus: entry.loginStatus });
 }
 /** @param {Entry} entry @param {string} [status] */
 function beginLogin(entry, status = 'Signing in…') {
@@ -118,7 +127,7 @@ function updateModeShortcuts() {
     })) registeredShortcuts.add(accelerator);
   }
 }
-/** The audio switching shortcut works in every app window and mode. A connection page consumes
+/** The app-wide shortcuts (audio switching, meeting mode) work in every app window and mode. A connection page consumes
  * it itself (see preload.cjs), so held modifiers never reach the remote computer; other windows
  * drop the key here, except while Settings records a shortcut.
  * @param {Electron.WebContents} contents @param {boolean} [pageConsumes] */
@@ -133,8 +142,9 @@ function handleAppShortcuts(contents, pageConsumes = false) {
     }
     if (input.type === 'keyDown') dropped.delete(input.code);
     const recording = settingsRecording && !!settingsWindow && contents === settingsWindow.webContents;
-    if (input.type === 'keyDown' && !recording && matchesBinding(config.keyboard?.pauseAudioSwitching, input)) {
-      if (!input.isAutoRepeat) toggleAudioSwitching();
+    const appAction = input.type === 'keyDown' && !recording ? appActions.find(action => matchesBinding(config.keyboard?.[action], input)) : undefined;
+    if (appAction) {
+      if (!input.isAutoRepeat) (appAction === 'meetingMode' ? toggleMeetingMode : toggleAudioSwitching)();
       if (!pageConsumes) { event.preventDefault(); dropped.add(input.code); }
       return;
     }
@@ -197,6 +207,43 @@ function toggleAudioSwitching() {
   for (const entry of windows.values()) entry.pausedForeground = audioSwitchingPaused ? isForeground(entry) : null;
   installMenu();
   syncAudio();
+}
+/** The experimental background pause never stops the shared connection while meeting mode is on.
+ * @param {Entry} entry */
+function pausesVideo(entry) {
+  return config.experimentalPauseBackgroundVideo === true && isViewer(entry) && !isForeground(entry) && !(meetingMode && entry.device.id === meetingShared);
+}
+/** @param {Entry} entry @returns {number | null} */
+function frameRateFor(entry) {
+  if (!meetingMode || !isViewer(entry)) return null;
+  return entry.device.id === meetingShared || isForeground(entry) ? meetingFrameRate : idleFrameRate;
+}
+/** Applies meeting mode to every viewer: frame rate limits, background pause and window shadows. */
+function syncVideo() {
+  for (const entry of windows.values()) {
+    if (entry.window.isDestroyed()) continue;
+    entry.window.setHasShadow(entry.options && !meetingMode);
+    entry.window.webContents.send('glkvm:background-video', pausesVideo(entry));
+    entry.window.webContents.send('glkvm:frame-rate', frameRateFor(entry));
+  }
+}
+/** Starting meeting mode shares the focused connection, or the last one used. */
+function toggleMeetingMode() {
+  meetingMode = !meetingMode;
+  if (meetingMode) {
+    const entry = focusedEntry();
+    const shared = entry && isViewer(entry) ? entry : windows.get(lastDeviceId) || windows.values().next().value;
+    meetingShared = shared?.device.id ?? null;
+  } else meetingShared = null;
+  installMenu();
+  syncVideo();
+}
+/** @param {Entry} entry */
+function shareInMeeting(entry) {
+  if (!meetingMode || !isViewer(entry)) return;
+  meetingShared = entry.device.id;
+  installMenu();
+  syncVideo();
 }
 /** The focused, visible, non-minimized viewer uses the foreground profile; all others use background.
  * @param {Entry} entry */
@@ -380,7 +427,7 @@ function showDevice(device, consoleWindow = false, background = false) {
   applyMute(entry);
   win.on('closed', () => { if (entry.loginTimer) clearTimeout(entry.loginTimer); if (entry.audio.saltTimer) clearTimeout(entry.audio.saltTimer); collection.delete(device.id); installMenu(); updateCatalog(); syncAudio(); });
   // Audio profiles follow native window focus and visibility, not player focus.
-  if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => { syncAudio(); win.webContents.send('glkvm:background-video', config.experimentalPauseBackgroundVideo === true && !isForeground(entry)); });
+  if (!consoleWindow) for (const name of /** @type {const} */ (['focus', 'blur', 'show', 'hide', 'minimize', 'restore'])) win.on(/** @type {'focus'} */ (name), () => { syncAudio(); syncVideo(); });
   win.on('focus', () => { lastDeviceId = device.id; installMenu(); });
   win.on('blur', () => { if (!consoleWindow) win.webContents.send('glkvm:suspend-input'); });
   win.on('resized', installMenu);
@@ -477,7 +524,7 @@ function setDeviceOptions(entry, enabled) {
     if (entry.cleanBounds && !win.isFullScreen()) win.setBounds(entry.cleanBounds);
     if (entry.videoSize) win.setAspectRatio(entry.videoSize.width / entry.videoSize.height);
   }
-  win.setHasShadow(entry.options);
+  win.setHasShadow(entry.options && !meetingMode);
   sendMode(entry);
   win.webContents.focus();
   installMenu();
@@ -527,6 +574,8 @@ function installMenu() {
       } },
       // Shown, not registered: the key is handled in every window, including view-only and Settings.
       { label: `Pause Audio Switching${config.keyboard?.pauseAudioSwitching ? ` (${config.keyboard.pauseAudioSwitching.label})` : ''}`, type: 'checkbox', checked: audioSwitchingPaused, click: toggleAudioSwitching },
+      { label: `Meeting Mode${config.keyboard?.meetingMode ? ` (${config.keyboard.meetingMode.label})` : ''}${meetingMode ? ` — Sharing ${config.devices.find(device => device.id === meetingShared)?.name ?? 'no connection'}` : ''}`, type: 'checkbox', checked: meetingMode, click: toggleMeetingMode },
+      { label: 'Share This Window in Meeting Mode', enabled: meetingMode && !!viewer && entry.device.id !== meetingShared, click: () => { if (entry) shareInMeeting(entry); } },
       { type: 'separator' },
       { label: 'Reload', accelerator: 'CmdOrCtrl+R', enabled: !!entry, click: () => { if (entry) { releaseInput(entry); entry.window.webContents.reload(); } } }, { role: 'close' },
     ] },
@@ -566,7 +615,7 @@ function installMenu() {
       { role: 'togglefullscreen' }, { type: 'separator' }, { role: 'front' },
     ] },
     { label: 'Help', submenu: [{ label: 'Using GLKVM Clean', click: () => {
-      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. The Pause Audio Switching shortcut (⇧⌘A by default, set in Settings → Keyboard) keeps each connection on its current focused or background audio until you press it again. No screen-sharing session is started by this app.' });
+      void dialog.showMessageBox({ type: 'info', message: 'A clean window for each remote screen', detail: 'Share the “GLKVM <name>” window in your meeting app. ⌘⇧O shows or hides device controls in this window, including while sharing.\n\nClick the video to use the remote keyboard and mouse. ⌘⇧M switches between controlling the desktop and dragging the window. Use ⌘, for app settings and ⌘⇧O for device settings.\n\nApp shortcuts stay local. Other keys go to the focused remote player. Camera access is unavailable. Each connection can use its own microphone and speaker in Settings; the app never changes the macOS default devices. The Pause Audio Switching shortcut (⇧⌘A by default, set in Settings → Keyboard) keeps each connection on its current focused or background audio until you press it again. Meeting Mode (⇧⌘E by default) lowers GPU and CPU load while you share a window: the window focused when it starts stays shared at up to 30 fps, the focused window also gets 30 fps, other windows update twice per second, and window shadows are off. No screen-sharing session is started by this app.' });
     } }] },
   ]));
 }

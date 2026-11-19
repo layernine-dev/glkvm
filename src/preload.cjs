@@ -53,6 +53,34 @@ function syncBackgroundVideo() {
 }
 // Reapply if the device page starts or restarts playback while in the background.
 document.addEventListener('play', syncBackgroundVideo, true);
+// Above any device stream's rate; the KVM sends at most 60 frames per second.
+const uncappedFrameRate = 240;
+/** Meeting mode's frame rate limit for this window, or null without a limit. */
+let maxFrameRate = /** @type {number | null} */ (null);
+/** Video tracks this window limited, with the limit applied. Only these are reset. @type {Map<MediaStreamTrack, number>} */
+const limitedTracks = new Map();
+/** Chromium drops frames above a track's frameRate maximum before they reach the compositor, so the
+ * page receives and decodes every frame but only the limited rate is drawn. Applies to live MediaStream
+ * video, not to Direct H.264 canvas playback. */
+function syncFrameRate() {
+  for (const [track, limit] of limitedTracks) {
+    if (track.readyState === 'ended') { limitedTracks.delete(track); continue; }
+    if (maxFrameRate !== null && maxFrameRate === limit) continue;
+    if (maxFrameRate === null) limitedTracks.delete(track);
+    else limitedTracks.set(track, maxFrameRate);
+    // An empty constraint set keeps the previous maximum; the uncapped value restores the source rate.
+    void track.applyConstraints({ frameRate: { max: maxFrameRate ?? uncappedFrameRate } }).catch(error => console.warn('Could not change the meeting mode frame rate:', error));
+  }
+  if (maxFrameRate === null) return;
+  for (const video of document.querySelectorAll('video')) {
+    if (!(video.srcObject instanceof MediaStream)) continue;
+    for (const track of video.srcObject.getVideoTracks()) {
+      if (track.readyState !== 'live' || limitedTracks.has(track)) continue;
+      limitedTracks.set(track, maxFrameRate);
+      void track.applyConstraints({ frameRate: { max: maxFrameRate } }).catch(error => console.warn('Could not limit the meeting mode frame rate:', error));
+    }
+  }
+}
 let deviceName = '';
 /** @type {{width: number, height: number} | null} */
 let videoPoints = null;
@@ -74,11 +102,14 @@ const pressedButtons = new Set();
 let keyboard;
 const pendingModifiers = new Map();
 const consumedKeys = new Set();
-/** Audio switching shortcut keys consumed in every focus and mode, until released. */
-const pauseKeys = new Set();
+/** App-wide shortcut keys (audio switching, meeting mode) consumed in every focus and mode, until released. */
+const appKeys = new Set();
 const heldModifiers = new Map();
-// The main process toggles audio switching for its shortcut; this page only consumes the key.
-const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste', 'pauseAudioSwitching']);
+// The main process handles the app-wide shortcuts (audio switching, meeting mode); this page only consumes their keys.
+const appActions = /** @type {const} */ (['pauseAudioSwitching', 'meetingMode']);
+const keyboardActions = /** @type {const} */ (['insert', 'secureAttention', 'paste', ...appActions]);
+/** @param {string | undefined} action */
+const isAppAction = action => appActions.includes(/** @type {typeof appActions[number]} */ (action));
 /** @type {Record<string, 'meta' | 'control' | 'alt' | 'shift'>} */
 const modifierNames = { MetaLeft: 'meta', MetaRight: 'meta', ControlLeft: 'control', ControlRight: 'control', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
 function consumeModifiers() {
@@ -125,9 +156,9 @@ function handleKeyboardShortcut(event) {
   });
   if (event.type === 'keydown' && action) {
     for (const key of pendingModifiers.keys()) consumedKeys.add(key);
-    // The audio switching key itself is tracked in pauseKeys, which outlives focus changes.
-    pendingModifiers.clear(); if (action !== 'pauseAudioSwitching') consumedKeys.add(code);
-    if (!event.repeat && action !== 'pauseAudioSwitching') ipcRenderer.send('glkvm:keyboard-shortcut', action);
+    // An app-wide shortcut key itself is tracked in appKeys, which outlives focus changes.
+    pendingModifiers.clear(); if (!isAppAction(action)) consumedKeys.add(code);
+    if (!event.repeat && !isAppAction(action)) ipcRenderer.send('glkvm:keyboard-shortcut', action);
     return true;
   }
   if (consumedKeys.has(code)) {
@@ -155,9 +186,11 @@ function handleKeyboardShortcut(event) {
 }
 
 /** @param {Event} event */
-function isPauseShortcut(event) {
-  const binding = keyboard?.pauseAudioSwitching;
-  return event instanceof KeyboardEvent && event.type === 'keydown' && event.isTrusted && !!binding && binding.code === event.code && binding.meta === event.metaKey && binding.control === event.ctrlKey && binding.alt === event.altKey && binding.shift === event.shiftKey;
+function isAppShortcut(event) {
+  return event instanceof KeyboardEvent && event.type === 'keydown' && event.isTrusted && appActions.some(action => {
+    const binding = keyboard?.[action];
+    return !!binding && binding.code === event.code && binding.meta === event.metaKey && binding.control === event.ctrlKey && binding.alt === event.altKey && binding.shift === event.shiftKey;
+  });
 }
 function playerFocused() {
   return !!player && (document.activeElement === player || player.contains(document.activeElement)) && !document.activeElement?.closest('input, textarea, select, [contenteditable="true"]');
@@ -237,10 +270,18 @@ ipcRenderer.on('glkvm:background-video', (_event, paused) => {
   pauseBackgroundVideo = paused === true;
   syncBackgroundVideo();
 });
+/** @param {unknown} value */
+function frameRateLimit(value) { return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 60 ? value : null; }
+ipcRenderer.on('glkvm:frame-rate', (_event, value) => {
+  maxFrameRate = frameRateLimit(value);
+  syncFrameRate();
+});
 ipcRenderer.on('glkvm:mode', (_event, mode) => {
   releaseInput();
   pauseBackgroundVideo = mode?.pauseBackgroundVideo === true;
   syncBackgroundVideo();
+  maxFrameRate = frameRateLimit(mode?.maxFrameRate);
+  syncFrameRate();
   keyboard = mode?.keyboard;
   loginStatus = typeof mode?.loginStatus === 'string' ? mode.loginStatus : '';
   controlEnabled = mode?.controlEnabled === true;
@@ -262,18 +303,18 @@ for (const name of [
 ]) {
   window.addEventListener(name, event => {
     if (releasing) return;
-    // The audio switching shortcut never reaches the page or the remote computer, in any mode.
-    // Its key stays consumed until released, even after its modifiers are or focus moves between
+    // App-wide shortcuts never reach the page or the remote computer, in any mode.
+    // Their key stays consumed until released, even after its modifiers are or focus moves between
     // the player and a local field; a fresh press means its keyup was missed.
-    if (event instanceof KeyboardEvent && event.isTrusted && pauseKeys.has(event.code)) {
+    if (event instanceof KeyboardEvent && event.isTrusted && appKeys.has(event.code)) {
       if (event.type === 'keyup' || (event.type === 'keydown' && event.repeat)) {
-        if (event.type === 'keyup') pauseKeys.delete(event.code);
+        if (event.type === 'keyup') appKeys.delete(event.code);
         event.preventDefault(); event.stopImmediatePropagation(); return;
       }
-      if (event.type === 'keydown') pauseKeys.delete(event.code);
+      if (event.type === 'keydown') appKeys.delete(event.code);
     }
-    const pause = isPauseShortcut(event);
-    if (pause) pauseKeys.add(/** @type {KeyboardEvent} */ (event).code);
+    const appShortcut = isAppShortcut(event);
+    if (appShortcut) appKeys.add(/** @type {KeyboardEvent} */ (event).code);
     const playerMouse = event instanceof MouseEvent && !!player && event.target instanceof Node && player.contains(event.target);
     if (event instanceof MouseEvent && name === 'mouseup' && pressedButtons.has(event.button) && !playerMouse) {
       pressedButtons.delete(event.button);
@@ -284,14 +325,14 @@ for (const name of [
       return;
     }
     if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent) && !playerMouse) {
-      if (pause) { event.preventDefault(); event.stopImmediatePropagation(); }
+      if (appShortcut) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
     }
     if (!controlEnabled || moving || !ready || ['dragstart', 'dragover', 'drop'].includes(name)) {
       event.preventDefault(); event.stopImmediatePropagation(); return;
     }
     if (event instanceof KeyboardEvent) {
-      if (handleKeyboardShortcut(event) || pause) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      if (handleKeyboardShortcut(event) || appShortcut) { event.preventDefault(); event.stopImmediatePropagation(); return; }
       if (name === 'keydown') pressedKeys.set(event.code || event.key, { code: event.code, key: event.key, location: event.location });
       if (name === 'keyup') pressedKeys.delete(event.code || event.key);
     }
@@ -306,6 +347,8 @@ for (const name of [
 
 function update() {
   syncBackgroundVideo();
+  // A reconnect brings a new track; limit it as soon as it is attached.
+  syncFrameRate();
   const root = document.documentElement;
   root.toggleAttribute('data-glkvm-options', options);
   root.toggleAttribute('data-glkvm-sized', options && !!videoPoints);
