@@ -122,6 +122,7 @@ bun run verify:signature "/Applications/GLKVM Clean.app"
 | ⌘W | Close the focused window |
 | ⌘⇧C | Center the focused window |
 | ⌘Q | Quit the app |
+| ⇧⌘E | Turn Meeting Mode on or off (change it in Settings → Keyboard) |
 
 In view-only mode, drag anywhere on the video to move its window. In control
 mode, use move mode to reposition it. Drag a window edge to resize it. The
@@ -146,6 +147,27 @@ local. Editing shortcuts such as ⌘C and ⌘V pass through to the remote keyboa
 while the clean player is active; this does not synchronize the local clipboard.
 The original device settings include keyboard layout, Command/Ctrl swapping,
 mouse mode, video quality, and the vendor's other configuration panels.
+
+### Meeting mode
+
+**Device → Meeting Mode** (⇧⌘E by default) lowers the app's GPU and CPU load while
+you share a window in a video meeting. The window focused when meeting mode
+starts becomes the shared window; **Device → Share This Window in Meeting Mode**
+moves that role to the focused window. The menu shows the mode and the shared
+connection. Meeting mode lasts until it is turned off or the app quits.
+
+- The shared window and the focused window draw at most 30 frames per second, at
+  full resolution. The shared window keeps that rate while another app is
+  focused, so the meeting app captures it as usual.
+- All other connection windows draw at most two frames per second. They stay
+  connected; audio, input and their status continue.
+
+Frame limits apply to WebRTC video. The device still sends and the Mac still
+decodes every frame; only drawing is limited. The device's `desired_fps` setting
+does not change its WebRTC stream, so the app does not change device settings.
+Direct H.264 canvas playback is not limited. The experimental background pause
+never pauses the shared window while meeting mode is on. Hidden login helpers
+are unaffected.
 
 ## Settings and connections
 
@@ -290,8 +312,10 @@ handlers and coordinates. View-only and move modes block remote input. Focus los
 mode changes, and disconnects release tracked keys and mouse buttons.
 
 The device interface is revealed in place by disabling the clean-view CSS and
-input gate. Window buttons, a draggable title bar, and the shadow appear
-only in this mode. A hidden helper using the same session handles saved-password
+input gate. Window buttons and a draggable title bar appear only in this mode.
+Device windows never have a native shadow: WindowServer redraws the shadow of
+these square-cornered windows continuously, and with two 1080p windows on an
+M3 Max the shadows cost more GPU time than both videos. A hidden helper using the same session handles saved-password
 sign-in and closes when authenticated; it is never the visible settings surface.
 
 The adapter targets the observed GLKVM 1.10.1 release3 DOM (`#stream-window`,

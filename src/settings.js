@@ -118,14 +118,14 @@ settings.load().then(async value => {
 function renderKeyboard() {
   const container = document.querySelector('#keyboard-bindings');
   container.replaceChildren();
-  for (const [action, title] of [['insert', 'Insert'], ['secureAttention', 'Ctrl + Alt + Delete'], ['paste', 'Paste clipboard as text'], ['pauseAudioSwitching', 'Pause audio switching']]) {
+  for (const [action, title] of [['insert', 'Insert'], ['secureAttention', 'Ctrl + Alt + Delete'], ['paste', 'Paste clipboard as text'], ['pauseAudioSwitching', 'Pause audio switching'], ['meetingMode', 'Meeting mode']]) {
     const row = document.createElement('div'); row.className = 'setting-row';
     const label = document.createElement('strong'); label.textContent = title;
     const record = document.createElement('button'); record.type = 'button';
     record.textContent = config.keyboard[action]?.label || 'Disabled';
     record.setAttribute('aria-label', `${title} shortcut: ${record.textContent}`);
     let recording = false;
-    // While recording, the app leaves its own shortcuts, such as pausing audio switching, to this button.
+    // While recording, the app leaves its own shortcuts, such as pausing audio switching or meeting mode, to this button.
     record.addEventListener('click', () => { recording = true; settings.recording(true); record.textContent = 'Press shortcut…'; });
     record.addEventListener('blur', () => { recording = false; settings.recording(false); record.textContent = config.keyboard[action]?.label || 'Disabled'; });
     record.addEventListener('keydown', event => {

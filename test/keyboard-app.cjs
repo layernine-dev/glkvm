@@ -265,7 +265,7 @@ server.listen(0, '127.0.0.1', async () => {
     command('Settings…');
     await waitFor(() => BrowserWindow.getAllWindows().some(w => w.getTitle() === 'GLKVM Clean Settings'));
     const settings = BrowserWindow.getAllWindows().find(w => w.getTitle() === 'GLKVM Clean Settings'); assert.ok(settings);
-    await waitFor(() => !settings.webContents.isLoading() && settings.webContents.executeJavaScript("document.querySelectorAll('#keyboard-bindings button').length === 8"));
+    await waitFor(() => !settings.webContents.isLoading() && settings.webContents.executeJavaScript("document.querySelectorAll('#keyboard-bindings button').length === 10"));
     settings.focus(); await waitFor(() => settings.isFocused());
     pressPause(settings);
     await expectPaused(false, 'The shortcut works in Settings');
