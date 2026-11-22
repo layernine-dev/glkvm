@@ -10,11 +10,17 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glkvm-keyboard-'));
 app.setPath('userData', directory);
 /** @type {string[]} */
 const pastes = [];
+/** While set, print requests wait here for the test to answer them, like a device still typing. @type {(() => void)[] | null} */
+let heldPrints = null;
 const server = createServer((req, res) => {
   if (req.url?.startsWith('/api/hid/print')) {
     let text = '';
     req.on('data', chunk => { text += chunk; });
-    req.on('end', () => { pastes.push(text); res.setHeader('content-type', 'application/json'); res.end('{"ok":true}'); });
+    req.on('end', () => {
+      pastes.push(text);
+      const answer = () => { res.setHeader('content-type', 'application/json'); res.end('{"ok":true}'); };
+      if (heldPrints) heldPrints.push(answer); else answer();
+    });
   } else {
     res.setHeader('content-type', 'text/html');
     res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replace('<script>', '<script>localStorage.setItem("fixture-auth", "true");'));
@@ -37,7 +43,8 @@ server.listen(0, '127.0.0.1', async () => {
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(config));
   await app.whenReady();
   const originalRead = clipboard.readText;
-  clipboard.readText = async () => 'Notes test\nÄÖÜ';
+  let clipboardText = 'Notes test\nÄÖÜ';
+  clipboard.readText = async () => clipboardText;
   require('../src/main.cjs');
   let streaming = false;
   ipcMain.on('glkvm:stream-state', (_event, value) => { streaming = value; });
@@ -92,6 +99,44 @@ server.listen(0, '127.0.0.1', async () => {
     await waitFor(() => pastes.length === 1);
     assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'Paste must never forward the physical Command key');
     assert.equal(pastes[0], 'Notes test\nÄÖÜ');
+    // Long text is sent in parts of at most 500 characters, without splitting a character or a CRLF line break.
+    clipboardText = `${'a'.repeat(499)}😀${'ä'.repeat(499)}\r\n${'ä'.repeat(50)}`;
+    // The first paste's request is recorded before its response is read; let it finish.
+    await new Promise(resolve => setTimeout(resolve, 200));
+    press('V', ['meta']);
+    await waitFor(() => pastes.length === 4);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.deepEqual(pastes.slice(1), [`${'a'.repeat(499)}😀`, 'ä'.repeat(499), `\r\n${'ä'.repeat(50)}`], 'Parts are sent in order and joined they are the whole text');
+    assert.equal(await win.webContents.executeJavaScript("document.querySelector('#glkvm-paste').hidden"), true, 'The progress bar closes after the paste');
+    // Escape stops a running paste after the part being typed, and never reaches the remote computer.
+    clipboardText = 'x'.repeat(1500);
+    heldPrints = [];
+    await win.webContents.executeJavaScript('window.keyLog = []');
+    press('V', ['meta']);
+    await waitFor(() => heldPrints?.length === 1);
+    assert.equal(await win.webContents.executeJavaScript("document.querySelector('#glkvm-paste').hidden === false && document.querySelector('#glkvm-paste span').textContent"), 'Pasting 0 of 1,500 characters · Esc to cancel');
+    press('Escape', []);
+    await waitFor(() => win.webContents.executeJavaScript("document.querySelector('#glkvm-paste').hidden"));
+    for (const answer of heldPrints.splice(0)) answer();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(pastes.length, 5, 'No part is sent after Escape');
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), [], 'Escape and its release are not sent to the remote computer');
+    // The Cancel button stops the paste the same way, without taking focus from the player.
+    press('V', ['meta']);
+    await waitFor(() => heldPrints?.length === 1);
+    await waitFor(() => win.webContents.executeJavaScript("document.querySelector('#glkvm-paste').hidden === false"));
+    const button = await win.webContents.executeJavaScript("(() => { const r = document.querySelector('#glkvm-paste button').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()");
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: button.x, y: button.y, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: button.x, y: button.y, button: 'left', clickCount: 1 });
+    await waitFor(() => win.webContents.executeJavaScript("document.querySelector('#glkvm-paste').hidden"));
+    for (const answer of heldPrints.splice(0)) answer();
+    heldPrints = null;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(pastes.length, 6, 'No part is sent after Cancel');
+    assert.equal(await win.webContents.executeJavaScript("document.activeElement === document.querySelector('#stream-box')"), true, 'The player keeps the keyboard focus');
+    assert.deepEqual(await win.webContents.executeJavaScript('window.keyLog'), []);
+    // Later checks count pastes from the first one.
+    pastes.splice(1); clipboardText = 'Notes test\nÄÖÜ';
     await win.webContents.executeJavaScript('window.keyLog = []');
     press('C', ['meta']);
     await waitFor(() => win.webContents.executeJavaScript('window.keyLog.length === 4'));
@@ -317,7 +362,7 @@ server.listen(0, '127.0.0.1', async () => {
     press('V', ['meta']);
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(pastes.length, 1);
-    console.log('PASS: no remote Command tap, Command+Tab or Center shortcut keys, modifier-only transitions, ordinary remote chords, options-enabled startup, Insert, Ctrl+Alt+Delete, text paste, local-field isolation, disconnected stream gate, pause audio switching shortcut (migrated default, one toggle per press, no remote keys, local field, no stale modifiers after a local-field release, live move mode and view-only, Settings and its recorder)');
+    console.log('PASS: no remote Command tap, Command+Tab or Center shortcut keys, modifier-only transitions, ordinary remote chords, options-enabled startup, Insert, Ctrl+Alt+Delete, text paste (500-character parts, Escape and Cancel), local-field isolation, disconnected stream gate, pause audio switching shortcut (migrated default, one toggle per press, no remote keys, local field, no stale modifiers after a local-field release, live move mode and view-only, Settings and its recorder)');
     clipboard.readText = originalRead; server.close(); app.exit(0);
   } catch (error) { console.error(error); const failedWindow = BrowserWindow.getAllWindows().find(w => w.getTitle() === 'Keyboard Fixture'); if (failedWindow) console.error('Keyboard fixture state:', failedWindow.isFocused(), await failedWindow.webContents.executeJavaScript('({active:document.activeElement.id,log:window.keyLog})')); clipboard.readText = originalRead; server.close(); app.exit(1); }
 });

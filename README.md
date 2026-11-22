@@ -367,5 +367,7 @@ options visible. Local text fields retain normal editing. Paste uses the same
 `/api/hid/print` service as the vendor Toolbox without opening its panel. Select
 the remote computer's keyboard layout (German by default). Plain text and line
 breaks are sent; images and formatting are not. Text expanders that trigger Cmd+V
-can use this path. A failed transfer is never automatically retried because some
-text may already have reached the remote computer.
+can use this path. Text is sent in parts of 500 characters so long text does not
+time out; while a longer paste runs, a small bar shows how much was sent, and
+Esc, Cancel, view-only or Move Window Mode stops it after the part being typed. A failed transfer is never
+automatically retried because some text may already have reached the remote computer.

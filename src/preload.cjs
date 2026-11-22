@@ -217,16 +217,7 @@ ipcRenderer.on('glkvm:keyboard-action', async (_event, command) => {
     if (command.action === 'paste') {
       if (typeof command.text !== 'string' || !command.text) return;
       if (!['de', 'de-ch', 'en-us', 'en-gb', 'fr'].includes(command.keymap)) return;
-      // Match the vendor Toolbox's authenticated text endpoint. Do not log text or tokens.
-      const tokens = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}');
-      const token = tokens.glkvm;
-      const response = await fetch(`/api/hid/print?limit=0&keymap=${encodeURIComponent(command.keymap)}`, {
-        method: 'POST', credentials: 'same-origin', redirect: 'error',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8', ...(typeof token === 'string' ? { token } : {}) },
-        body: command.text,
-        signal: AbortSignal.timeout(30000),
-      });
-      if (!response.ok || (await response.json()).ok !== true) throw new Error('Text could not be sent. Check the connection and remote keyboard layout. It was not retried automatically.');
+      await pasteText(command.text, command.keymap);
     } else {
       const keys = command.action === 'insert' ? [{ code: 'Insert', key: 'Insert', keyCode: 45 }] : [
         { code: 'ControlLeft', key: 'Control', keyCode: 17, location: 1 },
@@ -241,10 +232,88 @@ ipcRenderer.on('glkvm:keyboard-action', async (_event, command) => {
         releasing = false;
       }
     }
-  } catch {
-    ipcRenderer.send('glkvm:keyboard-error', 'The keyboard action could not be completed. Check the connection and paste layout. Text may have been partially sent; it was not retried.');
+  } catch (error) {
+    const detail = error instanceof PasteError ? error.message : 'The keyboard action could not be completed. Check the connection and paste layout. Text may have been partially sent; it was not retried.';
+    ipcRenderer.send('glkvm:keyboard-error', detail);
   } finally { keyboardBusy = false; }
 });
+
+/** The device types each request before answering; long text would exceed the request timeout. */
+const pasteChunkLength = 500;
+class PasteError extends Error {}
+/** @type {AbortController | null} */
+let pasteAbort = null;
+/** @type {HTMLDivElement | null} */
+let pasteOverlay = null;
+/** True from an Escape press that canceled a paste until that key is released. */
+let pasteEscapeHeld = false;
+/** Splits text into chunks of at most `length` characters without splitting a character or a CRLF line break. @param {string} text @param {number} length */
+function pasteChunks(text, length) {
+  const characters = Array.from(text);
+  const chunks = [];
+  for (let start = 0; start < characters.length;) {
+    let end = Math.min(start + length, characters.length);
+    if (end < characters.length && end - start > 1 && characters[end - 1] === '\r' && characters[end] === '\n') end--;
+    chunks.push(characters.slice(start, end).join(''));
+    start = end;
+  }
+  return chunks;
+}
+function cancelPaste() { pasteAbort?.abort(); }
+/** @param {number} sent @param {number} total */
+function showPasteProgress(sent, total) {
+  if (!pasteOverlay) {
+    pasteOverlay = document.createElement('div');
+    pasteOverlay.id = 'glkvm-paste';
+    pasteOverlay.setAttribute('role', 'status');
+    const label = document.createElement('span');
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = 'Cancel';
+    // Keep the keyboard focus on the player while the button is clicked.
+    button.addEventListener('mousedown', event => event.preventDefault());
+    button.addEventListener('click', cancelPaste);
+    pasteOverlay.append(label, button);
+    document.documentElement.append(pasteOverlay);
+  }
+  const format = new Intl.NumberFormat('en-US');
+  /** @type {HTMLSpanElement} */ (pasteOverlay.firstElementChild).textContent = `Pasting ${format.format(sent)} of ${format.format(total)} characters · Esc to cancel`;
+  pasteOverlay.hidden = false;
+}
+/** Sends text in chunks so every request finishes within its timeout. Escape or Cancel stops before the next chunk.
+ * @param {string} text @param {string} keymap */
+async function pasteText(text, keymap) {
+  const chunks = pasteChunks(text, pasteChunkLength);
+  const total = Array.from(text).length;
+  const abort = new AbortController();
+  // Only a multi-part paste shows its progress and can be canceled; Escape otherwise stays a remote key.
+  if (chunks.length > 1) pasteAbort = abort;
+  let sent = 0;
+  try {
+    for (const chunk of chunks) {
+      if (abort.signal.aborted || !controlEnabled || moving) return;
+      if (chunks.length > 1) showPasteProgress(sent, total);
+      try {
+        // Match the vendor Toolbox's authenticated text endpoint. Do not log text or tokens.
+        const tokens = JSON.parse(localStorage.getItem('gl-kvm-token-keys') || '{}');
+        const token = tokens.glkvm;
+        const response = await fetch(`/api/hid/print?limit=0&keymap=${encodeURIComponent(keymap)}`, {
+          method: 'POST', credentials: 'same-origin', redirect: 'error',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8', ...(typeof token === 'string' ? { token } : {}) },
+          body: chunk,
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30000)]),
+        });
+        if (!response.ok || (await response.json()).ok !== true) throw new Error('rejected');
+      } catch (error) {
+        if (abort.signal.aborted) return;
+        throw new PasteError(`Text could not be sent after ${sent} of ${total} characters. The failed part may have been partially typed; the rest was not retried. Check the connection and remote keyboard layout.`, { cause: error });
+      }
+      sent += Array.from(chunk).length;
+    }
+  } finally {
+    if (pasteAbort === abort) pasteAbort = null;
+    if (pasteOverlay) pasteOverlay.hidden = true;
+  }
+}
 
 /** @param {unknown} [preserveLocalModifiers] @param {boolean} [preserveFocus] */
 function releaseInput(preserveLocalModifiers = false, preserveFocus = false) {
@@ -303,6 +372,14 @@ for (const name of [
 ]) {
   window.addEventListener(name, event => {
     if (releasing) return;
+    // Escape cancels a running paste and is not sent to the remote computer, including its release.
+    // A fresh press after a missed release is an ordinary key again.
+    if (event instanceof KeyboardEvent && event.isTrusted && event.code === 'Escape' && pasteEscapeHeld && !pasteAbort && event.type === 'keydown' && !event.repeat) pasteEscapeHeld = false;
+    if (event instanceof KeyboardEvent && event.isTrusted && event.code === 'Escape' && (pasteAbort || pasteEscapeHeld)) {
+      if (event.type === 'keydown' && pasteAbort) { pasteEscapeHeld = true; cancelPaste(); }
+      if (event.type === 'keyup') pasteEscapeHeld = false;
+      event.preventDefault(); event.stopImmediatePropagation(); return;
+    }
     // App-wide shortcuts never reach the page or the remote computer, in any mode.
     // Their key stays consumed until released, even after its modifiers are or focus moves between
     // the player and a local field; a fresh press means its keyup was missed.
@@ -324,6 +401,8 @@ for (const name of [
       } finally { releasing = false; }
       return;
     }
+    // The paste progress bar is local UI; its Cancel button never reaches the page or the remote computer.
+    if (pasteOverlay && event.target instanceof Node && pasteOverlay.contains(event.target)) return;
     if (!document.documentElement.hasAttribute('data-glkvm-clean') && !(playerFocused() && event instanceof KeyboardEvent) && !playerMouse) {
       if (appShortcut) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
@@ -541,6 +620,19 @@ window.addEventListener('DOMContentLoaded', () => {
     @media (prefers-reduced-motion: reduce) { #glkvm-clean-status.busy::before { animation: none; } }
     #glkvm-clean-status { color: #a3a3a3; font: 14px system-ui; }
     #glkvm-clean-status[hidden] { display: none; }
+    #glkvm-paste {
+      position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 2147483647;
+      box-sizing: border-box; width: max-content; max-width: calc(100vw - 16px);
+      display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 14px; border-radius: 10px;
+      background: rgb(30 30 30 / 0.92); color: #eee; font: 13px system-ui;
+      box-shadow: 0 2px 12px rgb(0 0 0 / 0.4); visibility: visible !important; -webkit-app-region: no-drag;
+    }
+    #glkvm-paste[hidden] { display: none; }
+    #glkvm-paste span { font-variant-numeric: tabular-nums; }
+    #glkvm-paste button {
+      flex: none; font: inherit; color: #eee; background: #444; border: 0; border-radius: 6px; padding: 4px 12px; cursor: default;
+    }
+    #glkvm-paste button:hover { background: #555; }
   `;
   document.head.append(style);
   surface = document.createElement('div');
