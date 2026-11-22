@@ -244,6 +244,18 @@ server.listen(0, '127.0.0.1', async () => {
       assert.deepEqual(clean.getBounds(), bounds);
       assert.equal(await clean.webContents.executeJavaScript('window.documentToken'), documentToken);
     }
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'O', modifiers: ['meta', 'shift'] });
+    clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'O', modifiers: ['meta', 'shift'] });
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
+    clean.setPosition(bounds.x + 30, bounds.y + 30);
+    const moved = clean.getBounds();
+    clean.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'O', modifiers: ['meta', 'shift'] });
+    clean.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'O', modifiers: ['meta', 'shift'] });
+    await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-clean')"));
+    assert.deepEqual(clean.getBounds(), { x: moved.x, y: moved.y, width: bounds.width, height: bounds.height }, 'Leaving device settings keeps the window where the user moved it');
+    clean.setAspectRatio(0);
+    clean.setBounds(bounds);
+    clean.setAspectRatio(640 / 360);
     command('Device Settings…');
     await waitFor(() => clean.webContents.executeJavaScript("document.documentElement.hasAttribute('data-glkvm-options')"));
     await clean.webContents.executeJavaScript("document.querySelector('#glkvm-title-bar button[aria-label=\"Minimize window\"]').click()");
