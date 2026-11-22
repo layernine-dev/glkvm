@@ -290,7 +290,7 @@ async function pasteText(text, keymap) {
   let sent = 0;
   try {
     for (const chunk of chunks) {
-      if (abort.signal.aborted || !controlEnabled) return;
+      if (abort.signal.aborted || !controlEnabled || moving) return;
       if (chunks.length > 1) showPasteProgress(sent, total);
       try {
         // Match the vendor Toolbox's authenticated text endpoint. Do not log text or tokens.
