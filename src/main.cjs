@@ -522,7 +522,14 @@ function setDeviceOptions(entry, enabled) {
     }
   } else {
     win.setMinimumSize(160, 90);
-    if (entry.cleanBounds && !win.isFullScreen()) win.setBounds(entry.cleanBounds);
+    if (entry.cleanBounds && !win.isFullScreen()) {
+      // Keep the window where the user left it; restore only the clean size, nudged back into the work area if needed.
+      const current = win.getBounds();
+      const { x, y } = current;
+      const { width, height } = entry.cleanBounds;
+      const work = screen.getDisplayMatching(current).workArea;
+      win.setBounds({ x: Math.max(work.x, Math.min(x, work.x + work.width - width)), y: Math.max(work.y, Math.min(y, work.y + work.height - height)), width, height });
+    }
     if (entry.videoSize) win.setAspectRatio(entry.videoSize.width / entry.videoSize.height);
   }
   sendMode(entry);
